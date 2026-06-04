@@ -141,6 +141,7 @@ const Card=({children,style})=>(
 const ProgressBar=({label,current,target,color,sublabel})=>{
   const pct = target!==0 ? Math.min(100,Math.abs(current/target)*100) : 0;
   const barColor = pct>80?'#ff2255':pct>50?'#ffc800':color;
+
   return (
     <div style={{marginBottom:14}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
@@ -154,6 +155,52 @@ const ProgressBar=({label,current,target,color,sublabel})=>{
     </div>
   );
 };
+
+// ── TRADE CARD (gallery view) — standalone component ──────────────────────────
+function TradeCard({t, onOpen, onLoadImg}) {
+  const [img, setImg] = useState(null);
+  const rVal = t.rValue;
+  const isOpen = t.status === 'Open';
+  const dotColor = isOpen ? '#ffc800' : rVal > 0 ? '#00ffa3' : '#ff2255';
+  useEffect(()=>{
+    if(t.hasImage && onLoadImg) onLoadImg(t.id).then(v=>{ if(v) setImg(v); });
+  },[t.id, t.hasImage]);
+  return (
+    <div onClick={()=>onOpen(t)}
+      style={{cursor:'pointer',borderRadius:4,overflow:'hidden',background:'#060f1a',border:'1px solid rgba(0,170,255,0.1)',position:'relative',transition:'transform .18s, box-shadow .18s'}}
+      onMouseEnter={e=>{e.currentTarget.style.transform='scale(1.03)';e.currentTarget.style.boxShadow='0 0 22px rgba(0,170,255,0.14)';e.currentTarget.style.borderColor='rgba(0,170,255,0.3)';}}
+      onMouseLeave={e=>{e.currentTarget.style.transform='scale(1)';e.currentTarget.style.boxShadow='none';e.currentTarget.style.borderColor='rgba(0,170,255,0.1)';}}>
+      {/* Image — 16:9 */}
+      <div style={{paddingTop:'62%',position:'relative',background:'#02090f',overflow:'hidden'}}>
+        {img ? (
+          <img src={img} alt="" style={{position:'absolute',top:0,left:0,width:'100%',height:'100%',objectFit:'cover'}}/>
+        ) : (
+          <div style={{position:'absolute',inset:0,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:6}}>
+            <div style={{fontSize:26,opacity:.25}}>📷</div>
+            <div style={{fontFamily:'Orbitron,sans-serif',fontSize:7,letterSpacing:2,color:'rgba(58,107,138,0.4)',textTransform:'uppercase'}}>PAS DE SCREENSHOT</div>
+          </div>
+        )}
+        <div style={{position:'absolute',top:0,left:0,right:0,height:3,background:dotColor,opacity:.85}}/>
+      </div>
+      {/* Info bar */}
+      <div style={{padding:'9px 11px',background:'#060f1a',borderTop:'1px solid rgba(0,170,255,0.07)'}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:5}}>
+          <div style={{display:'flex',alignItems:'center',gap:6}}>
+            <div style={{width:7,height:7,borderRadius:'50%',background:dotColor,boxShadow:'0 0 6px '+dotColor,flexShrink:0}}/>
+            <span style={{fontFamily:'Orbitron,sans-serif',fontSize:9,fontWeight:700,letterSpacing:.5,color:t.symbol==='NAS100'?'#00aaff':'#ffc800'}}>{t.symbol}</span>
+          </div>
+          <span style={{fontFamily:'Orbitron,sans-serif',fontSize:11,fontWeight:700,color:isOpen?'#ffc800':rVal>0?'#00ffa3':'#ff2255'}}>
+            {isOpen?'◉ LIVE':fmtR(rVal)}
+          </span>
+        </div>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+          <span style={{fontSize:9,color:'#3a6b8a',fontFamily:'Share Tech Mono,monospace'}}>{t.date}</span>
+          <span style={{fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:.5,color:t.direction==='Long'?'#00ffa3':'#ff2255'}}>{t.direction==='Long'?'▲':'▼'} {t.direction}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ── MAIN ──────────────────────────────────────────────────────────────────────
 export default function TradingJournal(){
@@ -177,6 +224,7 @@ export default function TradingJournal(){
   const [objForm,   setObjForm]   = useState(DEFAULT_OBJ);
   const [calYM,     setCalYM]     = useState(curYM());
   const [calDay,    setCalDay]    = useState(null);
+  const [gridView,  setGridView]  = useState(true);
   const fileRef = useRef();
 
   // ── Storage ──────────────────────────────────────────────────────────────
@@ -478,26 +526,49 @@ export default function TradingJournal(){
       {/* ══ JOURNAL ════════════════════════════════════════════════════════ */}
       {tab==='journal'&&(
         <div className="fade-in">
-          <Card>
-            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14,flexWrap:'wrap',gap:8}}>
-              <SectionTitle>◈ TRADE LOG — {filtered.length} / {trades.length}</SectionTitle>
+          <div style={{background:'#060f1a',border:'1px solid rgba(0,170,255,0.09)',borderRadius:3,padding:16}}>
+            {/* Toolbar */}
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16,flexWrap:'wrap',gap:8}}>
+              <div style={{fontFamily:'Orbitron,sans-serif',fontSize:9,letterSpacing:2.5,color:'#3a6b8a',textTransform:'uppercase'}}>◈ TRADE LOG — {filtered.length} / {trades.length}</div>
               <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
                 <div style={{display:'flex',gap:5}}>
-                  {['ALL','NAS100','SPX500'].map(s=><button key={s} onClick={()=>setSymFilter(s)} style={{fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:1.5,padding:'6px 12px',border:'1px solid '+(symFilter===s?'rgba(0,170,255,0.45)':'rgba(0,170,255,0.1)'),background:symFilter===s?'rgba(0,170,255,0.1)':'transparent',color:symFilter===s?'#00aaff':'#3a6b8a',cursor:'pointer',borderRadius:2,textTransform:'uppercase',transition:'all .15s'}}>{s}</button>)}
+                  {['ALL','NAS100','SPX500'].map(s=>(
+                    <button key={s} onClick={()=>setSymFilter(s)} style={{fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:1.5,padding:'5px 11px',border:'1px solid '+(symFilter===s?'rgba(0,170,255,0.45)':'rgba(0,170,255,0.1)'),background:symFilter===s?'rgba(0,170,255,0.1)':'transparent',color:symFilter===s?'#00aaff':'#3a6b8a',cursor:'pointer',borderRadius:2,textTransform:'uppercase',transition:'all .15s'}}>{s}</button>
+                  ))}
                 </div>
-                <input placeholder="Filtrer stratégie / session / notes…" value={filter} onChange={e=>setFilter(e.target.value)} style={{background:'#081625',border:'1px solid rgba(0,170,255,0.13)',color:'#c5e8ff',fontFamily:'Share Tech Mono,monospace',fontSize:11,padding:'6px 10px',borderRadius:2,outline:'none',width:220}}/>
+                <input placeholder="Stratégie / session / notes…" value={filter} onChange={e=>setFilter(e.target.value)}
+                  style={{background:'#081625',border:'1px solid rgba(0,170,255,0.13)',color:'#c5e8ff',fontFamily:'Share Tech Mono,monospace',fontSize:11,padding:'5px 9px',borderRadius:2,outline:'none',width:200}}/>
+                {/* View toggle */}
+                <div style={{display:'flex',gap:3,background:'#081625',border:'1px solid rgba(0,170,255,0.12)',borderRadius:3,padding:3}}>
+                  <button onClick={()=>setGridView(true)} title="Galerie"
+                    style={{background:gridView?'rgba(0,170,255,0.15)':'transparent',border:'1px solid '+(gridView?'rgba(0,170,255,0.4)':'transparent'),color:gridView?'#00aaff':'#3a6b8a',cursor:'pointer',borderRadius:2,padding:'4px 10px',fontSize:14,lineHeight:1,transition:'all .15s'}}>⊞</button>
+                  <button onClick={()=>setGridView(false)} title="Liste"
+                    style={{background:!gridView?'rgba(0,170,255,0.15)':'transparent',border:'1px solid '+(!gridView?'rgba(0,170,255,0.4)':'transparent'),color:!gridView?'#00aaff':'#3a6b8a',cursor:'pointer',borderRadius:2,padding:'4px 10px',fontSize:14,lineHeight:1,transition:'all .15s'}}>☰</button>
+                </div>
               </div>
             </div>
-            <div style={{overflowX:'auto'}}>
-              <table style={{width:'100%',borderCollapse:'collapse',minWidth:950}}>
-                <thead><tr>{fullCols.map(c=><TH key={c.k} col={c}/>)}</tr></thead>
-                <tbody>
-                  {filtered.length===0&&<tr><td colSpan={fullCols.length} style={{padding:24,textAlign:'center',color:'#3a6b8a',fontSize:11,fontFamily:'Orbitron,sans-serif',letterSpacing:2}}>AUCUN TRADE</td></tr>}
-                  {filtered.map(t=>renderRow(t,fullCols))}
-                </tbody>
-              </table>
-            </div>
-          </Card>
+
+            {filtered.length===0&&(
+              <div style={{padding:'40px 0',textAlign:'center',color:'#3a6b8a',fontFamily:'Orbitron,sans-serif',fontSize:11,letterSpacing:2}}>AUCUN TRADE</div>
+            )}
+
+            {/* ── GRID VIEW ── */}
+            {gridView&&filtered.length>0&&(
+              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(190px,1fr))',gap:10}}>
+                {filtered.map(t=><TradeCard key={t.id} t={t} onOpen={openDetail} onLoadImg={loadImg}/>)}
+              </div>
+            )}
+
+            {/* ── LIST VIEW ── */}
+            {!gridView&&filtered.length>0&&(
+              <div style={{overflowX:'auto'}}>
+                <table style={{width:'100%',borderCollapse:'collapse',minWidth:950}}>
+                  <thead><tr>{fullCols.map(c=><TH key={c.k} col={c}/>)}</tr></thead>
+                  <tbody>{filtered.map(t=>renderRow(t,fullCols))}</tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
