@@ -22,7 +22,7 @@ input[type=file]{display:none}
 .spin{animation:spin .8s linear infinite}
 `;
 
-const STRATEGIES = ['Trend Follow','Breakout','Reversal','Scalp','Swing','Mean Reversion','News/Event','Gap Play','VWAP Reclaim','Other'];
+const STRATEGIES = ['Red Pile FX','Trend Follow','Breakout','Reversal','Scalp','Swing','Mean Reversion','News/Event','Gap Play','VWAP Reclaim','Other'];
 const SYMBOLS    = ['NAS100','SPX500'];
 const SESSIONS   = ['NY Open','NY Afternoon','London Open','LN/NY Overlap','Asia'];
 const TIMEFRAMES = ['1m','5m','15m','30m','1H','4H','Daily'];
@@ -69,7 +69,7 @@ async function resizeImage(dataUrl,maxPx=1200){
   });
 }
 
-async function analyzeChart(dataUrl,trade){
+async function analyzeChart(dataUrl,trade,apiKey){
   const resized=await resizeImage(dataUrl); const b64=resized.split(',')[1];
   const prompt=`Tu es un mentor de trading expert sur les indices US (NAS100/SPX500).
 Trade: ${trade.symbol} ${trade.direction} | Résultat: ${trade.result||'ouvert'} (${trade.rValue!==null?fmtR(trade.rValue):'en cours'})
@@ -77,7 +77,9 @@ Stratégie: ${trade.strategy} | Session: ${trade.session||'—'} | TF: ${trade.t
 Émotion: ${trade.emotion||'—'} | Notes: "${trade.notes||'aucune'}"
 Relecture: "${trade.retro||'non remplie'}"
 Analyse en 5 bullets "•": Setup visible / Qualité exécution / Gestion du trade / Points positifs / À améliorer. Mentor exigeant, 130 mots max, français.`;
-  const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json","anthropic-version":"2023-06-01"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,messages:[{role:"user",content:[{type:"image",source:{type:"base64",media_type:"image/jpeg",data:b64}},{type:"text",text:prompt}]}]})});
+  const headers={"Content-Type":"application/json","anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"};
+  if(apiKey) headers["x-api-key"]=apiKey;
+  const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers,body:JSON.stringify({model:"claude-opus-4-5",max_tokens:1000,messages:[{role:"user",content:[{type:"image",source:{type:"base64",media_type:"image/jpeg",data:b64}},{type:"text",text:prompt}]}]})});
   if(!res.ok){const e=await res.json().catch(()=>({}));throw new Error(e?.error?.message||`HTTP ${res.status}`);}
   const data=await res.json();
   if(data.type==='error') throw new Error(data.error?.message||'Erreur API');
@@ -161,7 +163,7 @@ function TradeCard({t, onOpen, onLoadImg}) {
   const [img, setImg] = useState(null);
   const rVal = t.rValue;
   const isOpen = t.status === 'Open';
-  const dotColor = isOpen ? '#ffc800' : rVal > 0 ? '#00ffa3' : '#ff2255';
+  const dotColor = isOpen ? '#ffc800' : rVal === 0 ? '#00aaff' : rVal > 0 ? '#00ffa3' : '#ff2255';
   useEffect(()=>{
     if(t.hasImage && onLoadImg) onLoadImg(t.id).then(v=>{ if(v) setImg(v); });
   },[t.id, t.hasImage]);
@@ -222,6 +224,7 @@ export default function TradingJournal(){
   const [obj,       setObj]       = useState(DEFAULT_OBJ);
   const [showObj,   setShowObj]   = useState(false);
   const [objForm,   setObjForm]   = useState(DEFAULT_OBJ);
+  const [apiKey,    setApiKey]    = useState('');
   const [calYM,     setCalYM]     = useState(curYM());
   const [calDay,    setCalDay]    = useState(null);
   const [gridView,  setGridView]  = useState(true);
@@ -231,6 +234,7 @@ export default function TradingJournal(){
   useEffect(()=>{
     try{ const s=localStorage.getItem('nexus-trades-v3'); setTrades(s!==null?JSON.parse(s):DEMO_TRADES); }catch{ setTrades([]); }
     try{ const o=localStorage.getItem('nexus-obj'); if(o) setObj(JSON.parse(o)); }catch{}
+    try{ const k=localStorage.getItem('nexus-apikey'); if(k) setApiKey(k); }catch{}
     setLoaded(true);
   },[]);
 
@@ -259,15 +263,23 @@ export default function TradingJournal(){
 
   const doDelete=async id=>{ const next=trades.filter(t=>t.id!==id); persist(next); setConfirm(null); deleteImg(id); };
   const openDetail=async t=>{ setDetail(t); setAiText(''); setAiLoading(false); setDetailImg(await loadImg(t.id)); };
-  const runAnalysis=async()=>{ if(!detailImg||!detail) return; setAiLoading(true); setAiText(''); try{ setAiText(await analyzeChart(detailImg,detail)); }catch(e){ setAiText('⚠ Erreur: '+e.message); } setAiLoading(false); };
+  const runAnalysis=async()=>{
+    if(!detailImg||!detail) return;
+    if(!apiKey){ setAiText('⚠ Clé API manquante — ajoute ta clé Anthropic dans ⚙ Objectifs'); return; }
+    setAiLoading(true); setAiText('');
+    try{ setAiText(await analyzeChart(detailImg,detail,apiKey)); }
+    catch(e){ setAiText('⚠ Erreur: '+e.message); }
+    setAiLoading(false);
+  };
 
   // ── Stats ─────────────────────────────────────────────────────────────────
   const stats=useMemo(()=>{
     const closed=trades.filter(t=>t.status==='Closed'&&t.rValue!==null);
     const rVals=closed.map(t=>t.rValue);
-    const wins=rVals.filter(v=>v>0), losses=rVals.filter(v=>v<0);
+    const wins=rVals.filter(v=>v>0), losses=rVals.filter(v=>v<0), bes=rVals.filter(v=>v===0);
     const totalR=rVals.reduce((a,b)=>a+b,0);
-    const winRate=closed.length?(wins.length/closed.length)*100:0;
+    const winLossTotal=wins.length+losses.length;
+    const winRate=winLossTotal>0?(wins.length/winLossTotal)*100:0;
     const avgR=rVals.length?totalR/rVals.length:0;
     const gw=wins.reduce((a,b)=>a+b,0), gl=Math.abs(losses.reduce((a,b)=>a+b,0));
     const pf=gl>0?gw/gl:wins.length>0?99:0;
@@ -292,8 +304,8 @@ export default function TradingJournal(){
     const byStrat={}; closed.forEach(t=>{ if(!byStrat[t.strategy]) byStrat[t.strategy]={r:0,count:0,wins:0}; byStrat[t.strategy].r+=t.rValue; byStrat[t.strategy].count++; if(t.rValue>0) byStrat[t.strategy].wins++; });
 
     // By session
-    const bySess={}; closed.forEach(t=>{ const s=t.session||'Unknown'; if(!bySess[s]) bySess[s]={r:0,count:0,wins:0}; bySess[s].r+=t.rValue; bySess[s].count++; if(t.rValue>0) bySess[s].wins++; });
-    const sessionBars=Object.entries(bySess).map(([s,v])=>({session:s,winRate:v.count?parseFloat(((v.wins/v.count)*100).toFixed(1)):0,r:parseFloat(v.r.toFixed(2)),count:v.count}));
+    const bySess={}; closed.forEach(t=>{ const s=t.session||'Unknown'; if(!bySess[s]) bySess[s]={r:0,count:0,wins:0,losses:0}; bySess[s].r+=t.rValue; bySess[s].count++; if(t.rValue>0) bySess[s].wins++; if(t.rValue<0) bySess[s].losses++; });
+    const sessionBars=Object.entries(bySess).map(([s,v])=>{ const wl=v.wins+v.losses; return{session:s,winRate:wl>0?parseFloat(((v.wins/wl)*100).toFixed(1)):0,r:parseFloat(v.r.toFixed(2)),count:v.count}; });
 
     // Distribution
     const buckets=[{label:'<-2R',min:-Infinity,max:-2},{label:'-2→-1',min:-2,max:-1},{label:'-1→0',min:-1,max:0},{label:'0→+1',min:0,max:1},{label:'+1→+2',min:1,max:2},{label:'+2→+3',min:2,max:3},{label:'>+3R',min:3,max:Infinity}];
@@ -323,7 +335,7 @@ export default function TradingJournal(){
     // Calendar data - by date
     const byDate={}; closed.forEach(t=>{ byDate[t.date]=(byDate[t.date]||0)+t.rValue; });
 
-    return{totalR,monthR,todayR,winRate,avgR,pf:isFinite(pf)?pf:99,totalTrades:trades.length,closedTrades:closed.length,openTrades:trades.filter(t=>t.status==='Open').length,wins:wins.length,losses:losses.length,curve,symbolBars,byStrat,sessionBars,distData,curStreak,maxWin,maxLoss,heatmap,byEmotion,sharpe,ev,minCumR:runMin,byDate,todayTrades};
+    return{totalR,monthR,todayR,winRate,avgR,pf:isFinite(pf)?pf:99,totalTrades:trades.length,closedTrades:closed.length,openTrades:trades.filter(t=>t.status==='Open').length,wins:wins.length,losses:losses.length,bes:bes.length,curve,symbolBars,byStrat,sessionBars,distData,curStreak,maxWin,maxLoss,heatmap,byEmotion,sharpe,ev,minCumR:runMin,byDate,todayTrades};
   },[trades]);
 
   // ── Filter / sort ─────────────────────────────────────────────────────────
@@ -420,7 +432,7 @@ export default function TradingJournal(){
               {l:'R TOTAL',     v:fmtR(stats.totalR),    sub:stats.closedTrades+' trades fermés',  c:tc},
               {l:'CE MOIS',     v:fmtR(stats.monthR),    sub:MONTHS_FR[new Date().getMonth()],     c:mc},
               {l:"AUJOURD'HUI", v:fmtR(stats.todayR),    sub:stats.todayTrades.length+' trade(s)', c:stats.todayR>=0?'#00ffa3':'#ff2255'},
-              {l:'WIN RATE',    v:stats.winRate.toFixed(1)+'%', sub:stats.wins+'W · '+stats.losses+'L', c:'#00aaff'},
+              {l:'WIN RATE',    v:stats.winRate.toFixed(1)+'%', sub:stats.wins+'W · '+stats.losses+'L · '+stats.bes+'BE', c:'#00aaff'},
             ].map((m,i)=>(
               <div key={i} style={{background:'#060f1a',border:'1px solid rgba(0,170,255,0.09)',borderRadius:3,padding:'16px 18px',position:'relative',overflow:'hidden',transition:'border-color .2s'}}
                 onMouseEnter={e=>e.currentTarget.style.borderColor='rgba(0,170,255,0.22)'}
@@ -492,6 +504,7 @@ export default function TradingJournal(){
                   {l:'Perte moyenne', v:fmtR(stats.ev<0?stats.ev:-(stats.avgR<0?Math.abs(stats.avgR):0)), c:'#ff2255'},
                   {l:'Taux réussite', v:stats.winRate.toFixed(1)+'%',         c:stats.winRate>=50?'#00ffa3':'#ff2255'},
                   {l:'Nb de trades',  v:stats.totalTrades,                   c:'#c5e8ff'},
+                  {l:'Break Even',    v:stats.bes+' trade'+(stats.bes>1?'s':''), c:'#00aaff'},
                   {l:'Sharpe Ratio',  v:stats.sharpe.toFixed(2),              c:stats.sharpe>0?'#00ffa3':'#ff2255'},
                   {l:'Valeur attendue',v:fmtR(stats.ev),                     c:stats.ev>=0?'#00ffa3':'#ff2255'},
                   {l:'Facteur profit',v:stats.pf===99?'∞':stats.pf.toFixed(2),c:stats.pf>=1?'#00ffa3':'#ff2255'},
@@ -791,9 +804,26 @@ export default function TradingJournal(){
                 <div style={{fontSize:9,color:'#2a4f68',marginTop:4}}>Ex: -8 = max -8R sur le compte</div>
               </div>
             </div>
+
+            {/* API Key section */}
+            <div style={{marginTop:16,paddingTop:16,borderTop:'1px solid rgba(0,170,255,0.08)'}}>
+              <div style={{fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:2,color:'#00aaff',textTransform:'uppercase',marginBottom:6}}>⚡ CLÉ API ANTHROPIC (pour l'analyse IA)</div>
+              <div style={{fontSize:9,color:'#2a4f68',marginBottom:8,fontFamily:'Share Tech Mono,monospace',lineHeight:1.6}}>
+                Va sur <span style={{color:'#00aaff'}}>console.anthropic.com</span> → API Keys → créer une clé.<br/>
+                Elle est stockée uniquement sur ton appareil (localStorage).
+              </div>
+              <input
+                type="password"
+                value={apiKey}
+                onChange={e=>setApiKey(e.target.value)}
+                placeholder="sk-ant-api03-..."
+                style={{width:'100%',background:'#081625',border:'1px solid rgba(0,170,255,0.2)',color:'#c5e8ff',fontFamily:'Share Tech Mono,monospace',fontSize:12,padding:'8px 12px',borderRadius:2,outline:'none'}}/>
+              {apiKey&&<div style={{fontSize:9,color:'#00ffa3',marginTop:4,fontFamily:'Share Tech Mono,monospace'}}>✓ Clé configurée — {apiKey.slice(0,12)}...</div>}
+            </div>
+
             <div style={{display:'flex',gap:8,marginTop:20,justifyContent:'flex-end'}}>
               <button onClick={()=>setShowObj(false)} style={{background:'transparent',border:'1px solid rgba(0,170,255,0.15)',color:'#3a6b8a',fontFamily:'Share Tech Mono,monospace',fontSize:11,padding:'8px 16px',cursor:'pointer',borderRadius:2}}>ANNULER</button>
-              <button onClick={saveObj} style={{background:'rgba(0,170,255,0.1)',border:'1px solid #00aaff',color:'#00aaff',fontFamily:'Orbitron,sans-serif',fontSize:10,letterSpacing:2,padding:'8px 22px',cursor:'pointer',borderRadius:2,textTransform:'uppercase'}}>SAUVEGARDER</button>
+              <button onClick={()=>{ setObj(objForm); try{localStorage.setItem('nexus-obj',JSON.stringify(objForm)); localStorage.setItem('nexus-apikey',apiKey);}catch{} setShowObj(false); }} style={{background:'rgba(0,170,255,0.1)',border:'1px solid #00aaff',color:'#00aaff',fontFamily:'Orbitron,sans-serif',fontSize:10,letterSpacing:2,padding:'8px 22px',cursor:'pointer',borderRadius:2,textTransform:'uppercase'}}>SAUVEGARDER</button>
             </div>
           </div>
         </div>
@@ -896,9 +926,19 @@ export default function TradingJournal(){
               <FF label="DATE" value={form.date} onChange={v=>setF('date',v)} type="date"/>
               <div>
                 <div style={{fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:2,color:'#3a6b8a',textTransform:'uppercase',marginBottom:5}}>RÉSULTAT (R)</div>
-                <input value={form.result} onChange={e=>setF('result',e.target.value)} placeholder="+3 / -1 / +2.3R"
-                  style={{width:'100%',background:'#081625',border:'1px solid '+(form.result&&parseR(form.result)!==null?(parseR(form.result)>=0?'rgba(0,255,163,0.3)':'rgba(255,34,85,0.3)'):'rgba(0,170,255,0.13)'),color:form.result&&parseR(form.result)!==null?(parseR(form.result)>=0?'#00ffa3':'#ff2255'):'#c5e8ff',fontFamily:'Orbitron,sans-serif',fontSize:16,fontWeight:700,padding:'8px 10px',borderRadius:2,outline:'none',letterSpacing:1,transition:'all .2s'}}/>
-                {form.result&&parseR(form.result)!==null&&<div style={{fontFamily:'Orbitron,sans-serif',fontSize:9,marginTop:4,color:parseR(form.result)>=0?'#00ffa3':'#ff2255',letterSpacing:1}}>{fmtR(parseR(form.result))}</div>}
+                <div style={{display:'flex',gap:6,alignItems:'stretch'}}>
+                  <input value={form.result} onChange={e=>setF('result',e.target.value)} placeholder="+3 / -1 / +2.3R"
+                    style={{flex:1,background:'#081625',border:'1px solid '+(form.result&&parseR(form.result)!==null?(parseR(form.result)>0?'rgba(0,255,163,0.3)':parseR(form.result)<0?'rgba(255,34,85,0.3)':'rgba(0,170,255,0.35)'):'rgba(0,170,255,0.13)'),color:form.result&&parseR(form.result)!==null?(parseR(form.result)>0?'#00ffa3':parseR(form.result)<0?'#ff2255':'#00aaff'):'#c5e8ff',fontFamily:'Orbitron,sans-serif',fontSize:16,fontWeight:700,padding:'8px 10px',borderRadius:2,outline:'none',letterSpacing:1,transition:'all .2s'}}/>
+                  <button onClick={()=>setF('result','0')}
+                    style={{background:form.result==='0'?'rgba(0,170,255,0.18)':'rgba(0,170,255,0.05)',border:'1px solid '+(form.result==='0'?'#00aaff':'rgba(0,170,255,0.2)'),color:form.result==='0'?'#00aaff':'#3a6b8a',fontFamily:'Orbitron,sans-serif',fontSize:9,letterSpacing:1,padding:'0 12px',cursor:'pointer',borderRadius:2,transition:'all .15s',whiteSpace:'nowrap'}}>
+                    ◈ BE
+                  </button>
+                </div>
+                {form.result!==''&&parseR(form.result)!==null&&(
+                  <div style={{fontFamily:'Orbitron,sans-serif',fontSize:9,marginTop:5,letterSpacing:1,color:parseR(form.result)>0?'#00ffa3':parseR(form.result)<0?'#ff2255':'#00aaff'}}>
+                    {parseR(form.result)===0?'◈ BREAK EVEN — ne compte pas dans la Win Rate':fmtR(parseR(form.result))}
+                  </div>
+                )}
               </div>
             </div>
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:12}}>
