@@ -158,6 +158,7 @@ const ProgressBar=({label,current,target,color,sublabel})=>{
   );
 };
 
+
 // ── TRADE CARD (gallery view) — standalone component ──────────────────────────
 function TradeCard({t, onOpen, onLoadImg}) {
   const [img, setImg] = useState(null);
@@ -165,7 +166,7 @@ function TradeCard({t, onOpen, onLoadImg}) {
   const isOpen = t.status === 'Open';
   const dotColor = isOpen ? '#ffc800' : rVal === 0 ? '#00aaff' : rVal > 0 ? '#00ffa3' : '#ff2255';
   useEffect(()=>{
-    if(t.hasImage && onLoadImg) onLoadImg(t.id).then(v=>{ if(v) setImg(v); });
+    if(t.hasImage && onLoadImg) onLoadImg(t.id,0).then(v=>{ if(v) setImg(v); });
   },[t.id, t.hasImage]);
   return (
     <div onClick={()=>onOpen(t)}
@@ -211,14 +212,15 @@ export default function TradingJournal(){
   const [showForm,  setShowForm]  = useState(false);
   const [editId,    setEditId]    = useState(null);
   const [form,      setForm]      = useState(EMPTY);
-  const [formImage, setFormImage] = useState(null);
+  const [formImages, setFormImages] = useState([]);   // array of base64
   const [tab,       setTab]       = useState('dashboard');
   const [filter,    setFilter]    = useState('');
   const [symFilter, setSymFilter] = useState('ALL');
   const [sort,      setSort]      = useState({field:'date',dir:'desc'});
   const [confirm,   setConfirm]   = useState(null);
   const [detail,    setDetail]    = useState(null);
-  const [detailImg, setDetailImg] = useState(null);
+  const [detailImgs, setDetailImgs] = useState([]);   // array of base64
+  const [activeImg,  setActiveImg]  = useState(0);
   const [aiText,    setAiText]    = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [obj,       setObj]       = useState(DEFAULT_OBJ);
@@ -230,44 +232,78 @@ export default function TradingJournal(){
   const [gridView,  setGridView]  = useState(true);
   const fileRef = useRef();
 
-  // ── Storage ──────────────────────────────────────────────────────────────
+  // ── localStorage data layer ──────────────────────────────────────────────
   useEffect(()=>{
-    try{ const s=localStorage.getItem('nexus-trades-v3'); setTrades(s!==null?JSON.parse(s):DEMO_TRADES); }catch{ setTrades([]); }
     try{ const o=localStorage.getItem('nexus-obj'); if(o) setObj(JSON.parse(o)); }catch{}
     try{ const k=localStorage.getItem('nexus-apikey'); if(k) setApiKey(k); }catch{}
+    try{
+      const saved=localStorage.getItem('nexus-trades-v3');
+      setTrades(saved!==null?JSON.parse(saved):DEMO_TRADES);
+    }catch{ setTrades([]); }
     setLoaded(true);
   },[]);
 
-  const persist=next=>{ setTrades(next); try{ localStorage.setItem('nexus-trades-v3',JSON.stringify(next)); }catch{} };
-  const saveImg  =(id,url)=>{ try{ localStorage.setItem('ni-'+id,url); }catch{} };
-  const loadImg  =async id=>{ try{ return localStorage.getItem('ni-'+id)||null; }catch{ return null; } };
-  const deleteImg=async id=>{ try{ localStorage.removeItem('ni-'+id); }catch{} };
+  const persist = next=>{
+    setTrades(next);
+    try{ localStorage.setItem('nexus-trades-v3',JSON.stringify(next)); }catch(e){ console.warn(e); }
+  };
+
+  const saveImg   = (id,b64,idx=0)=>{ try{ localStorage.setItem('ni-'+id+'-'+idx,b64); }catch{} };
+  const loadImg   = async(id,idx=0)=>{ try{ return localStorage.getItem('ni-'+id+'-'+idx)||null; }catch{ return null; } };
+  const deleteImg = async(id,count=5)=>{ try{ Array.from({length:count},(_,i)=>localStorage.removeItem('ni-'+id+'-'+i)); }catch{} };
 
   // ── Objectives ───────────────────────────────────────────────────────────
   const saveObj=()=>{ setObj(objForm); try{ localStorage.setItem('nexus-obj',JSON.stringify(objForm)); }catch{} setShowObj(false); };
 
   // ── Form ──────────────────────────────────────────────────────────────────
-  const openAdd =()=>{ setEditId(null); setForm(Object.assign({},EMPTY,{date:today()})); setFormImage(null); setShowForm(true); };
-  const openEdit=async t=>{ setEditId(t.id); setForm({date:t.date,symbol:t.symbol,direction:t.direction,status:t.status,result:t.result||'',strategy:t.strategy,session:t.session||'NY Open',timeframe:t.timeframe||'15m',emotion:t.emotion||'😐 Neutre',notes:t.notes||'',retro:t.retro||''}); setFormImage(await loadImg(t.id)); setShowForm(true); };
+  const openAdd =()=>{ setEditId(null); setForm(Object.assign({},EMPTY,{date:today()})); setFormImages([]); setShowForm(true); };
+  const openEdit=async t=>{
+    setEditId(t.id);
+    setForm({date:t.date,symbol:t.symbol,direction:t.direction,status:t.status,result:t.result||'',strategy:t.strategy,session:t.session||'NY Open',timeframe:t.timeframe||'15m',emotion:t.emotion||'😐 Neutre',notes:t.notes||'',retro:t.retro||''});
+    const count=t.imageCount||0;
+    if(count>0){
+      const imgs=await Promise.all(Array.from({length:count},(_,i)=>loadImg(t.id,i)));
+      setFormImages(imgs.filter(Boolean));
+    } else { setFormImages([]); }
+    setShowForm(true);
+  };
   const setF=(k,v)=>setForm(f=>Object.assign({},f,{[k]:v}));
-  const handleImg=async e=>{ const f=e.target.files?.[0]; if(!f) return; setFormImage(await toBase64(f)); e.target.value=''; };
+  const handleImg=async e=>{
+    const files=[...e.target.files];
+    if(!files.length) return;
+    const b64s=await Promise.all(files.map(toBase64));
+    setFormImages(prev=>[...prev,...b64s].slice(0,5));  // max 5 screenshots
+    e.target.value='';
+  };
 
   const submitForm=async()=>{
     if(!form.date||!form.symbol) return;
     const id=editId||Date.now();
-    const trade={id,date:form.date,symbol:form.symbol,direction:form.direction,status:form.status,result:form.result.trim(),rValue:parseR(form.result),strategy:form.strategy,session:form.session,timeframe:form.timeframe,emotion:form.emotion,notes:form.notes,retro:form.retro||'',hasImage:!!formImage};
+    const trade={id,date:form.date,symbol:form.symbol,direction:form.direction,status:form.status,result:form.result.trim(),rValue:parseR(form.result),strategy:form.strategy,session:form.session,timeframe:form.timeframe,emotion:form.emotion,notes:form.notes,retro:form.retro||'',hasImage:formImages.length>0,imageCount:formImages.length};
     const next=editId?trades.map(t=>t.id===editId?trade:t):[...trades,trade];
     persist(next); setShowForm(false);
-    if(formImage) saveImg(id,formImage); else if(editId) deleteImg(id);
+    await deleteImg(id,10);
+    await Promise.all(formImages.map((img,i)=>saveImg(id,img,i)));
   };
 
   const doDelete=async id=>{ const next=trades.filter(t=>t.id!==id); persist(next); setConfirm(null); deleteImg(id); };
-  const openDetail=async t=>{ setDetail(t); setAiText(''); setAiLoading(false); setDetailImg(await loadImg(t.id)); };
+  const openDetail=async t=>{
+    setDetail(t); setAiText(''); setAiLoading(false); setActiveImg(0);
+    const count=t.imageCount||0;
+    if(count>0){
+      const imgs=await Promise.all(Array.from({length:count},(_,i)=>loadImg(t.id,i)));
+      setDetailImgs(imgs.filter(Boolean));
+    } else {
+      // backward compat: try loading old single image
+      const old=await loadImg(t.id,0);
+      setDetailImgs(old?[old]:[]);
+    }
+  };
   const runAnalysis=async()=>{
-    if(!detailImg||!detail) return;
+    if(!detailImgs.length||!detail) return;
     if(!apiKey){ setAiText('⚠ Clé API manquante — ajoute ta clé Anthropic dans ⚙ Objectifs'); return; }
     setAiLoading(true); setAiText('');
-    try{ setAiText(await analyzeChart(detailImg,detail,apiKey)); }
+    try{ setAiText(await analyzeChart(detailImgs[0],detail,apiKey)); }
     catch(e){ setAiText('⚠ Erreur: '+e.message); }
     setAiLoading(false);
   };
@@ -313,7 +349,8 @@ export default function TradingJournal(){
     const distData=buckets.map(b=>({label:b.label,count:ymT.filter(t=>t.rValue>b.min&&t.rValue<=b.max).length,pos:b.min>=0}));
 
     // Streak
-    const sortedAll=[...closed].sort((a,b)=>a.date.localeCompare(b.date));
+    // Streak — BE exclus, uniquement Wins et Losses
+    const sortedAll=[...closed].filter(t=>t.rValue!==0).sort((a,b)=>a.date.localeCompare(b.date));
     let curStreak=0,maxWin=0,maxLoss=0,tmpW=0,tmpL=0;
     sortedAll.forEach(t=>{ if(t.rValue>0){tmpW++;tmpL=0;if(tmpW>maxWin)maxWin=tmpW;}else{tmpL++;tmpW=0;if(tmpL>maxLoss)maxLoss=tmpL;} });
     let i=sortedAll.length-1;
@@ -823,7 +860,7 @@ export default function TradingJournal(){
 
             <div style={{display:'flex',gap:8,marginTop:20,justifyContent:'flex-end'}}>
               <button onClick={()=>setShowObj(false)} style={{background:'transparent',border:'1px solid rgba(0,170,255,0.15)',color:'#3a6b8a',fontFamily:'Share Tech Mono,monospace',fontSize:11,padding:'8px 16px',cursor:'pointer',borderRadius:2}}>ANNULER</button>
-              <button onClick={()=>{ setObj(objForm); try{localStorage.setItem('nexus-obj',JSON.stringify(objForm)); localStorage.setItem('nexus-apikey',apiKey);}catch{} setShowObj(false); }} style={{background:'rgba(0,170,255,0.1)',border:'1px solid #00aaff',color:'#00aaff',fontFamily:'Orbitron,sans-serif',fontSize:10,letterSpacing:2,padding:'8px 22px',cursor:'pointer',borderRadius:2,textTransform:'uppercase'}}>SAUVEGARDER</button>
+              <button onClick={()=>{ setObj(objForm); setShowObj(false); try{ localStorage.setItem('nexus-obj',JSON.stringify(objForm)); localStorage.setItem('nexus-apikey',apiKey); }catch{} }} style={{background:'rgba(0,170,255,0.1)',border:'1px solid #00aaff',color:'#00aaff',fontFamily:'Orbitron,sans-serif',fontSize:10,letterSpacing:2,padding:'8px 22px',cursor:'pointer',borderRadius:2,textTransform:'uppercase'}}>SAUVEGARDER</button>
             </div>
           </div>
         </div>
@@ -831,7 +868,7 @@ export default function TradingJournal(){
 
       {/* ══ DETAIL / AI ════════════════════════════════════════════════════ */}
       {detail&&(
-        <div style={{position:'fixed',inset:0,background:'rgba(2,9,15,0.92)',backdropFilter:'blur(8px)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',padding:16}} onClick={()=>{setDetail(null);setDetailImg(null);setAiText('');}}>
+        <div style={{position:'fixed',inset:0,background:'rgba(2,9,15,0.92)',backdropFilter:'blur(8px)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',padding:16}} onClick={()=>{setDetail(null);setDetailImgs([]);setAiText('');setActiveImg(0);}}>
           <div className="fade-in" onClick={e=>e.stopPropagation()} style={{background:'#060f1a',border:'1px solid rgba(0,170,255,0.25)',borderRadius:4,width:800,maxWidth:'100%',maxHeight:'90vh',overflowY:'auto',boxShadow:'0 0 80px rgba(0,170,255,0.07)'}}>
             <div style={{position:'sticky',top:0,zIndex:10,background:'#060f1a',borderBottom:'1px solid rgba(0,170,255,0.1)',padding:'14px 20px',display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:8}}>
               <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
@@ -841,23 +878,32 @@ export default function TradingJournal(){
                 <span style={{fontSize:9,color:'#3a6b8a'}}>{detail.date}</span>
                 {detail.session&&<Badge color='rgba(0,170,255,0.7)' bg='rgba(0,170,255,0.06)' border='rgba(0,170,255,0.15)'>{detail.session}</Badge>}
                 {detail.timeframe&&<Badge color='rgba(0,170,255,0.6)' bg='rgba(0,170,255,0.05)' border='rgba(0,170,255,0.12)'>{detail.timeframe}</Badge>}
-                {detail.emotion&&<span style={{fontSize:12}}>{detail.emotion}</span>}
-              </div>
-              <button onClick={()=>{setDetail(null);setDetailImg(null);setAiText('');}} style={{background:'transparent',border:'none',color:'#3a6b8a',fontSize:20,cursor:'pointer',transition:'color .15s'}} onMouseEnter={e=>e.target.style.color='#ff2255'} onMouseLeave={e=>e.target.style.color='#3a6b8a'}>✕</button>
-            </div>
-            <div style={{padding:20,display:'grid',gridTemplateColumns:detailImg?'1fr 1fr':'1fr',gap:16}}>
-              <div>
-                <div style={{fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:2.5,color:'#3a6b8a',textTransform:'uppercase',marginBottom:10}}>◈ SCREENSHOT</div>
-                {detailImg?(
-                  <div style={{position:'relative',borderRadius:3,overflow:'hidden',border:'1px solid rgba(0,170,255,0.15)'}}>
-                    <img src={detailImg} alt="trade" style={{width:'100%',display:'block',borderRadius:2}}/>
-                    <button onClick={()=>{openEdit(detail);setDetail(null);setDetailImg(null);setAiText('');}} style={{position:'absolute',bottom:8,right:8,background:'rgba(6,15,26,0.88)',border:'1px solid rgba(0,170,255,0.3)',color:'#3a6b8a',fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:1,padding:'4px 10px',cursor:'pointer',borderRadius:2}} onMouseEnter={e=>e.currentTarget.style.color='#00aaff'} onMouseLeave={e=>e.currentTarget.style.color='#3a6b8a'}>CHANGER</button>
+                {detailImgs.length>0?(
+                  <div>
+                    <div style={{position:'relative',borderRadius:3,overflow:'hidden',border:'1px solid rgba(0,170,255,0.15)',marginBottom:8}}>
+                      <img src={detailImgs[activeImg]} alt="trade" style={{width:'100%',display:'block',borderRadius:2,maxHeight:300,objectFit:'contain',background:'#02090f'}}/>
+                      {detailImgs.length>1&&activeImg>0&&<button onClick={()=>setActiveImg(i=>i-1)} style={{position:'absolute',left:8,top:'50%',transform:'translateY(-50%)',background:'rgba(2,9,15,0.82)',border:'1px solid rgba(0,170,255,0.35)',color:'#00aaff',width:28,height:28,borderRadius:'50%',cursor:'pointer',fontSize:16,display:'flex',alignItems:'center',justifyContent:'center'}}>‹</button>}
+                      {detailImgs.length>1&&activeImg<detailImgs.length-1&&<button onClick={()=>setActiveImg(i=>i+1)} style={{position:'absolute',right:8,top:'50%',transform:'translateY(-50%)',background:'rgba(2,9,15,0.82)',border:'1px solid rgba(0,170,255,0.35)',color:'#00aaff',width:28,height:28,borderRadius:'50%',cursor:'pointer',fontSize:16,display:'flex',alignItems:'center',justifyContent:'center'}}>›</button>}
+                      <div style={{position:'absolute',top:7,left:7,background:'rgba(2,9,15,0.82)',border:'1px solid rgba(0,170,255,0.3)',color:'#00aaff',fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:1,padding:'3px 8px',borderRadius:2}}>
+                        {['MAIN','HTF','LTF','ENTRY','EXTRA'][activeImg]||('#'+(activeImg+1))}{detailImgs.length>1?' '+String(activeImg+1)+'/'+String(detailImgs.length):''}
+                      </div>
+                      <button onClick={()=>{openEdit(detail);setDetail(null);setDetailImgs([]);setAiText('');}} style={{position:'absolute',bottom:7,right:7,background:'rgba(6,15,26,0.88)',border:'1px solid rgba(0,170,255,0.3)',color:'#3a6b8a',fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:1,padding:'4px 10px',cursor:'pointer',borderRadius:2}} onMouseEnter={e=>e.currentTarget.style.color='#00aaff'} onMouseLeave={e=>e.currentTarget.style.color='#3a6b8a'}>MODIFIER</button>
+                    </div>
+                    {detailImgs.length>1&&(
+                      <div style={{display:'flex',gap:6,overflowX:'auto',paddingBottom:4}}>
+                        {detailImgs.map((img,i)=>(
+                          <div key={i} onClick={()=>setActiveImg(i)} style={{flexShrink:0,width:56,height:36,borderRadius:2,overflow:'hidden',cursor:'pointer',border:'1px solid '+(i===activeImg?'#00aaff':'rgba(0,170,255,0.12)'),opacity:i===activeImg?1:0.5,transition:'all .15s'}}>
+                            <img src={img} style={{width:'100%',height:'100%',objectFit:'cover'}}/>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ):(
-                  <div onClick={()=>{openEdit(detail);setDetail(null);setDetailImg(null);setAiText('');}} style={{border:'1px dashed rgba(0,170,255,0.2)',borderRadius:3,padding:40,textAlign:'center',cursor:'pointer',transition:'all .2s',background:'rgba(0,170,255,0.02)'}} onMouseEnter={e=>{e.currentTarget.style.borderColor='rgba(0,170,255,0.45)';e.currentTarget.style.background='rgba(0,170,255,0.05)';}} onMouseLeave={e=>{e.currentTarget.style.borderColor='rgba(0,170,255,0.2)';e.currentTarget.style.background='rgba(0,170,255,0.02)';}}>
+                  <div onClick={()=>{openEdit(detail);setDetail(null);setDetailImgs([]);setAiText('');}} style={{border:'1px dashed rgba(0,170,255,0.2)',borderRadius:3,padding:40,textAlign:'center',cursor:'pointer',transition:'all .2s',background:'rgba(0,170,255,0.02)'}} onMouseEnter={e=>{e.currentTarget.style.borderColor='rgba(0,170,255,0.45)';e.currentTarget.style.background='rgba(0,170,255,0.05)';}} onMouseLeave={e=>{e.currentTarget.style.borderColor='rgba(0,170,255,0.2)';e.currentTarget.style.background='rgba(0,170,255,0.02)';}}>
                     <div style={{fontSize:28,marginBottom:10}}>📷</div>
-                    <div style={{fontFamily:'Orbitron,sans-serif',fontSize:9,letterSpacing:2,color:'#3a6b8a'}}>AJOUTER UN SCREENSHOT</div>
-                    <div style={{fontSize:10,color:'#2a4f68',marginTop:6}}>Clique pour modifier ce trade</div>
+                    <div style={{fontFamily:'Orbitron,sans-serif',fontSize:9,letterSpacing:2,color:'#3a6b8a',textTransform:'uppercase'}}>Ajouter des screenshots</div>
+                    <div style={{fontSize:10,color:'#2a4f68',marginTop:6}}>HTF · LTF · Entrée · jusqu'à 5 images</div>
                   </div>
                 )}
               </div>
@@ -875,12 +921,12 @@ export default function TradingJournal(){
                 <div style={{background:'#081625',border:'1px solid rgba(0,170,255,0.08)',borderRadius:3,padding:14,flex:1}}>
                   <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}}>
                     <div style={{fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:2.5,color:'#3a6b8a',textTransform:'uppercase'}}>◈ ANALYSE IA</div>
-                    {detailImg&&!aiLoading&&<button onClick={runAnalysis} style={{background:'rgba(0,170,255,0.08)',border:'1px solid rgba(0,170,255,0.35)',color:'#00aaff',fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:1.5,padding:'5px 12px',cursor:'pointer',borderRadius:2,textTransform:'uppercase',transition:'all .2s'}} onMouseEnter={e=>{e.currentTarget.style.background='rgba(0,170,255,0.18)';}} onMouseLeave={e=>{e.currentTarget.style.background='rgba(0,170,255,0.08)';}}>
+                    {detailImgs.length>0&&!aiLoading&&<button onClick={runAnalysis} style={{background:'rgba(0,170,255,0.08)',border:'1px solid rgba(0,170,255,0.35)',color:'#00aaff',fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:1.5,padding:'5px 12px',cursor:'pointer',borderRadius:2,textTransform:'uppercase',transition:'all .2s'}} onMouseEnter={e=>{e.currentTarget.style.background='rgba(0,170,255,0.18)';}} onMouseLeave={e=>{e.currentTarget.style.background='rgba(0,170,255,0.08)';}}>
                       {aiText?'↺ RELANCER':'⚡ ANALYSER'}
                     </button>}
                   </div>
-                  {!detailImg&&!aiText&&<div style={{fontSize:10,color:'#2a4f68',lineHeight:1.7}}>Ajoute un screenshot pour le feedback IA mentor.</div>}
-                  {detailImg&&!aiLoading&&!aiText&&<div style={{textAlign:'center',padding:'20px 0',fontSize:10,color:'#2a4f68'}}>Clique ⚡ ANALYSER pour le feedback mentor IA</div>}
+                  {detailImgs.length===0&&!aiText&&<div style={{fontSize:10,color:'#2a4f68',lineHeight:1.7}}>Ajoute des screenshots pour le feedback IA mentor.</div>}
+                  {detailImgs.length>0&&!aiLoading&&!aiText&&<div style={{textAlign:'center',padding:'20px 0',fontSize:10,color:'#2a4f68'}}>Clique ⚡ ANALYSER pour le feedback mentor IA</div>}
                   {aiLoading&&<div style={{textAlign:'center',padding:'24px 0',display:'flex',flexDirection:'column',alignItems:'center',gap:10}}><div style={{width:20,height:20,border:'2px solid rgba(0,170,255,0.2)',borderTopColor:'#00aaff',borderRadius:'50%'}} className="spin"/><div style={{fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:2,color:'#3a6b8a'}}>ANALYSE EN COURS...</div></div>}
                   {aiText&&!aiLoading&&<div style={{fontSize:11,color:'#c5e8ff',lineHeight:1.9,whiteSpace:'pre-wrap'}}>{aiText.split('\n').map((line,i)=>{ const fmt=line.replace(/\*\*(.*?)\*\*/g,'<strong style="color:#00aaff;font-family:Orbitron,sans-serif;font-size:9px;letter-spacing:1.5px;text-transform:uppercase">$1</strong>'); return <div key={i} dangerouslySetInnerHTML={{__html:fmt}} style={{color:line.startsWith('•')||line.startsWith('-')?'#a0c8e0':'#8ab5cc',marginBottom:4}}/>; })}</div>}
                 </div>
@@ -963,22 +1009,46 @@ export default function TradingJournal(){
               <div style={{fontSize:9,color:'#2a4f68',marginBottom:6}}>Relecture à froid — remplis 24h après.</div>
               <textarea value={form.retro} onChange={e=>setF('retro',e.target.value)} rows={2} placeholder="Aurais dû attendre la confirmation…" style={{width:'100%',background:'rgba(255,200,0,0.04)',border:'1px solid rgba(255,200,0,0.18)',color:'#c5e8ff',fontFamily:'Share Tech Mono,monospace',fontSize:12,padding:'8px 10px',borderRadius:2,outline:'none',resize:'vertical'}} onFocus={e=>e.target.style.borderColor='rgba(255,200,0,0.45)'} onBlur={e=>e.target.style.borderColor='rgba(255,200,0,0.18)'}/>
             </div>
+            {/* ── Multi-Screenshots ── */}
             <div style={{marginBottom:16}}>
-              <div style={{fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:2,color:'#3a6b8a',textTransform:'uppercase',marginBottom:8}}>◈ SCREENSHOT</div>
-              <input ref={fileRef} type="file" accept="image/*" onChange={handleImg}/>
-              {formImage?(
-                <div style={{position:'relative',border:'1px solid rgba(0,170,255,0.2)',borderRadius:3,overflow:'hidden'}}>
-                  <img src={formImage} alt="preview" style={{width:'100%',maxHeight:160,objectFit:'contain',background:'#02090f',display:'block'}}/>
-                  <div style={{position:'absolute',top:8,right:8,display:'flex',gap:6}}>
-                    <button onClick={()=>fileRef.current.click()} style={{background:'rgba(6,15,26,0.9)',border:'1px solid #00aaff',color:'#00aaff',fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:1,padding:'4px 10px',cursor:'pointer',borderRadius:2}}>CHANGER</button>
-                    <button onClick={()=>setFormImage(null)} style={{background:'rgba(6,15,26,0.9)',border:'1px solid #ff2255',color:'#ff2255',fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:1,padding:'4px 10px',cursor:'pointer',borderRadius:2}}>✕</button>
-                  </div>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+                <div style={{fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:2,color:'#3a6b8a',textTransform:'uppercase'}}>◈ SCREENSHOTS ({formImages.length}/5)</div>
+                {formImages.length<5&&<button onClick={()=>fileRef.current.click()} style={{background:'rgba(0,170,255,0.08)',border:'1px solid rgba(0,170,255,0.3)',color:'#00aaff',fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:1,padding:'4px 12px',cursor:'pointer',borderRadius:2}}>+ AJOUTER</button>}
+              </div>
+              <input ref={fileRef} type="file" accept="image/*" multiple onChange={handleImg}/>
+              {formImages.length>0?(
+                <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(130px,1fr))',gap:8}}>
+                  {formImages.map((img,i)=>(
+                    <div key={i} style={{position:'relative',borderRadius:3,overflow:'hidden',border:'1px solid rgba(0,170,255,0.15)',background:'#02090f'}}>
+                      <div style={{paddingTop:'62%',position:'relative'}}>
+                        <img src={img} alt={'screen '+(i+1)} style={{position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'cover'}}/>
+                        <div style={{position:'absolute',top:0,left:0,right:0,height:2,background:'#00aaff',opacity:.6}}/>
+                        <div style={{position:'absolute',bottom:3,left:5,fontFamily:'Orbitron,sans-serif',fontSize:7,color:'rgba(0,170,255,0.8)',letterSpacing:1,background:'rgba(2,9,15,0.7)',padding:'1px 4px',borderRadius:1}}>
+                          {['MAIN','HTF','LTF','ENTRY','EXTRA'][i]||('#'+(i+1))}
+                        </div>
+                        <button onClick={()=>setFormImages(prev=>prev.filter((_,j)=>j!==i))}
+                          style={{position:'absolute',top:4,right:4,background:'rgba(2,9,15,0.85)',border:'1px solid #ff2255',color:'#ff2255',width:18,height:18,borderRadius:'50%',cursor:'pointer',fontSize:10,display:'flex',alignItems:'center',justifyContent:'center',padding:0,lineHeight:1}}>✕</button>
+                      </div>
+                    </div>
+                  ))}
+                  {formImages.length<5&&(
+                    <div onClick={()=>fileRef.current.click()} style={{border:'1px dashed rgba(0,170,255,0.18)',borderRadius:3,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:4,cursor:'pointer',paddingTop:'62%',position:'relative',transition:'all .2s',background:'rgba(0,170,255,0.02)'}}
+                      onMouseEnter={e=>{e.currentTarget.style.borderColor='rgba(0,170,255,0.4)';e.currentTarget.style.background='rgba(0,170,255,0.05)';}}
+                      onMouseLeave={e=>{e.currentTarget.style.borderColor='rgba(0,170,255,0.18)';e.currentTarget.style.background='rgba(0,170,255,0.02)';}}>
+                      <div style={{position:'absolute',inset:0,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:4}}>
+                        <div style={{fontSize:18}}>📷</div>
+                        <div style={{fontFamily:'Orbitron,sans-serif',fontSize:7,letterSpacing:1,color:'#3a6b8a'}}>AJOUTER</div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               ):(
-                <div onClick={()=>fileRef.current.click()} style={{border:'1px dashed rgba(0,170,255,0.18)',borderRadius:3,padding:'16px 0',textAlign:'center',cursor:'pointer',transition:'all .2s',background:'rgba(0,170,255,0.02)'}} onMouseEnter={e=>{e.currentTarget.style.borderColor='rgba(0,170,255,0.4)';e.currentTarget.style.background='rgba(0,170,255,0.05)';}} onMouseLeave={e=>{e.currentTarget.style.borderColor='rgba(0,170,255,0.18)';e.currentTarget.style.background='rgba(0,170,255,0.02)';}}>
-                  <div style={{fontSize:20,marginBottom:5}}>📷</div>
-                  <div style={{fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:2,color:'#3a6b8a'}}>AJOUTER UN SCREENSHOT</div>
-                  <div style={{fontSize:9,color:'#2a4f68',marginTop:3}}>PNG, JPG — l'IA analysera le graphique</div>
+                <div onClick={()=>fileRef.current.click()} style={{border:'1px dashed rgba(0,170,255,0.18)',borderRadius:3,padding:'22px 0',textAlign:'center',cursor:'pointer',transition:'all .2s',background:'rgba(0,170,255,0.02)'}}
+                  onMouseEnter={e=>{e.currentTarget.style.borderColor='rgba(0,170,255,0.4)';e.currentTarget.style.background='rgba(0,170,255,0.05)';}}
+                  onMouseLeave={e=>{e.currentTarget.style.borderColor='rgba(0,170,255,0.18)';e.currentTarget.style.background='rgba(0,170,255,0.02)';}}>
+                  <div style={{fontSize:24,marginBottom:6}}>📷</div>
+                  <div style={{fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:2,color:'#3a6b8a'}}>AJOUTER DES SCREENSHOTS</div>
+                  <div style={{fontSize:9,color:'#2a4f68',marginTop:4}}>Jusqu'à 5 — HTF · LTF · Entrée · etc.</div>
                 </div>
               )}
             </div>
@@ -1006,3 +1076,4 @@ export default function TradingJournal(){
     </div>
   );
 }
+
