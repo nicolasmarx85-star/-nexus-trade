@@ -215,6 +215,7 @@ export default function TradingJournal(){
   const [formImages, setFormImages] = useState([]);   // array of base64
   const [tab,       setTab]       = useState('dashboard');
   const [filter,    setFilter]    = useState('');
+  const [stratFilter, setStratFilter] = useState('ALL');
   const [symFilter, setSymFilter] = useState('ALL');
   const [sort,      setSort]      = useState({field:'date',dir:'desc'});
   const [confirm,   setConfirm]   = useState(null);
@@ -379,10 +380,11 @@ export default function TradingJournal(){
   const filtered=useMemo(()=>{
     let list=[...trades];
     if(filter)list=list.filter(t=>t.strategy.toLowerCase().includes(filter.toLowerCase())||(t.notes||'').toLowerCase().includes(filter.toLowerCase())||(t.session||'').toLowerCase().includes(filter.toLowerCase()));
+    if(stratFilter!=='ALL')list=list.filter(t=>t.strategy===stratFilter);
     if(symFilter!=='ALL')list=list.filter(t=>t.symbol===symFilter);
     list.sort((a,b)=>{ const av=sort.field==='r'?(a.rValue??-Infinity):a[sort.field]??''; const bv=sort.field==='r'?(b.rValue??-Infinity):b[sort.field]??''; if(typeof av==='string')return sort.dir==='asc'?av.localeCompare(bv):bv.localeCompare(av); return sort.dir==='asc'?av-bv:bv-av; });
     return list;
-  },[trades,filter,symFilter,sort]);
+  },[trades,filter,symFilter,stratFilter,sort]);
 
   const toggleSort=f=>setSort(s=>({field:f,dir:s.field===f&&s.dir==='desc'?'asc':'desc'}));
 
@@ -586,7 +588,7 @@ export default function TradingJournal(){
                     <button key={s} onClick={()=>setSymFilter(s)} style={{fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:1.5,padding:'5px 11px',border:'1px solid '+(symFilter===s?'rgba(0,170,255,0.45)':'rgba(0,170,255,0.1)'),background:symFilter===s?'rgba(0,170,255,0.1)':'transparent',color:symFilter===s?'#00aaff':'#3a6b8a',cursor:'pointer',borderRadius:2,textTransform:'uppercase',transition:'all .15s'}}>{s}</button>
                   ))}
                 </div>
-                <input placeholder="Stratégie / session / notes…" value={filter} onChange={e=>setFilter(e.target.value)}
+                <input placeholder="Rechercher: stratégie, session, notes…" value={filter} onChange={e=>setFilter(e.target.value)}
                   style={{background:'#081625',border:'1px solid rgba(0,170,255,0.13)',color:'#c5e8ff',fontFamily:'Share Tech Mono,monospace',fontSize:11,padding:'5px 9px',borderRadius:2,outline:'none',width:200}}/>
                 {/* View toggle */}
                 <div style={{display:'flex',gap:3,background:'#081625',border:'1px solid rgba(0,170,255,0.12)',borderRadius:3,padding:3}}>
@@ -597,6 +599,28 @@ export default function TradingJournal(){
                 </div>
               </div>
             </div>
+
+            {/* Strategy chips — filtre + edge en un coup d'œil */}
+            {Object.keys(stats.byStrat).length>0&&(
+              <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:16,paddingBottom:14,borderBottom:'1px solid rgba(0,170,255,0.07)'}}>
+                <button onClick={()=>setStratFilter('ALL')}
+                  style={{fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:1,padding:'6px 12px',border:'1px solid '+(stratFilter==='ALL'?'rgba(0,170,255,0.45)':'rgba(0,170,255,0.1)'),background:stratFilter==='ALL'?'rgba(0,170,255,0.1)':'transparent',color:stratFilter==='ALL'?'#00aaff':'#3a6b8a',cursor:'pointer',borderRadius:3,textTransform:'uppercase',transition:'all .15s'}}>
+                  TOUTES
+                </button>
+                {Object.entries(stats.byStrat).sort((a,b)=>b[1].r-a[1].r).map(([s,v])=>{
+                  const active=stratFilter===s;
+                  const pos=v.r>=0;
+                  return(
+                    <button key={s} onClick={()=>setStratFilter(active?'ALL':s)}
+                      style={{display:'flex',alignItems:'center',gap:6,fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:1,padding:'6px 12px',border:'1px solid '+(active?(pos?'rgba(0,255,163,0.5)':'rgba(255,34,85,0.5)'):'rgba(0,170,255,0.1)'),background:active?(pos?'rgba(0,255,163,0.1)':'rgba(255,34,85,0.1)'):'transparent',color:active?(pos?'#00ffa3':'#ff2255'):'#3a6b8a',cursor:'pointer',borderRadius:3,textTransform:'uppercase',transition:'all .15s'}}>
+                      <span>{s}</span>
+                      <span style={{color:pos?'#00ffa3':'#ff2255',fontWeight:700}}>{fmtR(v.r)}</span>
+                      <span style={{color:'#2a4f68',fontWeight:400}}>· {v.count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
 
             {filtered.length===0&&(
               <div style={{padding:'40px 0',textAlign:'center',color:'#3a6b8a',fontFamily:'Orbitron,sans-serif',fontSize:11,letterSpacing:2}}>AUCUN TRADE</div>
@@ -1076,4 +1100,3 @@ export default function TradingJournal(){
     </div>
   );
 }
-
