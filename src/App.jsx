@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
-import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Cell } from "recharts";
+import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Cell, RadarChart, Radar, PolarGrid, PolarAngleAxis } from "recharts";
 
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;900&family=Share+Tech+Mono&display=swap');
@@ -159,6 +159,25 @@ const ProgressBar=({label,current,target,color,sublabel})=>{
 };
 
 
+
+// ── GAUGE ARC ─────────────────────────────────────────────────────────────────
+function GaugeArc({pct=0,color='#00ffa3',value='',sub=''}){
+  const r=38,cx=50,cy=48;
+  const c=Math.min(1,Math.max(0,pct));
+  const a=c*Math.PI;
+  const ex=cx-r*Math.cos(a), ey=cy-r*Math.sin(a);
+  const lg=c>0.5?1:0;
+  return(
+    <svg width="100" height="58" viewBox="0 0 100 58" style={{overflow:'visible'}}>
+      <path d={`M ${cx-r} ${cy} A ${r} ${r} 0 0 1 ${cx+r} ${cy}`} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="6" strokeLinecap="round"/>
+      {c>0&&<path d={`M ${cx-r} ${cy} A ${r} ${r} 0 ${lg} 1 ${ex} ${ey}`} fill="none" stroke={color} strokeWidth="6" strokeLinecap="round"/>}
+      {c>0&&<circle cx={ex} cy={ey} r="3.5" fill={color}/>}
+      <text x={cx} y={cy-4} textAnchor="middle" style={{fill:color,fontFamily:'Orbitron,sans-serif',fontSize:'13px',fontWeight:700}}>{value}</text>
+      {sub&&<text x={cx} y={cy+10} textAnchor="middle" style={{fill:'#3a6b8a',fontFamily:'Share Tech Mono,monospace',fontSize:'7.5px'}}>{sub}</text>}
+    </svg>
+  );
+}
+
 // ── TRADE CARD (gallery view) — standalone component ──────────────────────────
 function TradeCard({t, onOpen, onLoadImg}) {
   const [img, setImg] = useState(null);
@@ -231,12 +250,15 @@ export default function TradingJournal(){
   const [calYM,     setCalYM]     = useState(curYM());
   const [calDay,    setCalDay]    = useState(null);
   const [gridView,  setGridView]  = useState(true);
+  const [sysNotes,  setSysNotes]  = useState({});
+  const [sysSaved,  setSysSaved]  = useState(false);
   const fileRef = useRef();
 
   // ── localStorage data layer ──────────────────────────────────────────────
   useEffect(()=>{
     try{ const o=localStorage.getItem('nexus-obj'); if(o) setObj(JSON.parse(o)); }catch{}
     try{ const k=localStorage.getItem('nexus-apikey'); if(k) setApiKey(k); }catch{}
+    try{ const s=localStorage.getItem('nexus-system'); if(s) setSysNotes(JSON.parse(s)); }catch{}
     try{
       const saved=localStorage.getItem('nexus-trades-v3');
       setTrades(saved!==null?JSON.parse(saved):DEMO_TRADES);
@@ -373,7 +395,16 @@ export default function TradingJournal(){
     // Calendar data - by date
     const byDate={}; closed.forEach(t=>{ byDate[t.date]=(byDate[t.date]||0)+t.rValue; });
 
-    return{totalR,monthR,todayR,winRate,avgR,pf:isFinite(pf)?pf:99,totalTrades:trades.length,closedTrades:closed.length,openTrades:trades.filter(t=>t.status==='Open').length,wins:wins.length,losses:losses.length,bes:bes.length,curve,symbolBars,byStrat,sessionBars,distData,curStreak,maxWin,maxLoss,heatmap,byEmotion,sharpe,ev,minCumR:runMin,byDate,todayTrades};
+        // ── Nexus Score /25 ──
+    const ns_wr   = Math.round(Math.min(5,(winRate/100)*6.25));
+    const ns_pf   = Math.round(Math.min(5,(isFinite(pf)?pf:0)*1.2));
+    const ns_avgr = Math.round(Math.min(5,Math.max(0,avgR)*2.5));
+    const ns_str  = Math.min(5,Math.max(0,3+curStreak));
+    const ns_con  = Math.min(5,Math.round((closed.length/20)*5));
+    const nexusScore={wr:ns_wr,pf:ns_pf,avgr:ns_avgr,str:ns_str,con:ns_con,total:ns_wr+ns_pf+ns_avgr+ns_str+ns_con};
+    // ── Last 30 trades ──
+    const last30=[...closed].sort((a,b)=>a.date.localeCompare(b.date)).slice(-30).map((t,i)=>({i:i+1,r:t.rValue}));
+    return{totalR,monthR,todayR,winRate,avgR,pf:isFinite(pf)?pf:99,totalTrades:trades.length,closedTrades:closed.length,openTrades:trades.filter(t=>t.status==='Open').length,wins:wins.length,losses:losses.length,bes:bes.length,curve,symbolBars,byStrat,sessionBars,distData,curStreak,maxWin,maxLoss,heatmap,byEmotion,sharpe,ev,minCumR:runMin,byDate,todayTrades,nexusScore,last30};
   },[trades]);
 
   // ── Filter / sort ─────────────────────────────────────────────────────────
@@ -393,7 +424,7 @@ export default function TradingJournal(){
   const tc=stats.totalR>=0?'#00ffa3':'#ff2255';
   const mc=stats.monthR>=0?'#00ffa3':'#ff2255';
   const sc=stats.curStreak>0?'#00ffa3':stats.curStreak<0?'#ff2255':'#3a6b8a';
-  const TABS=['dashboard','journal','calendrier','analytics'];
+  const TABS=['dashboard','journal','calendrier','analytics','système'];
   const heatColor=(r,count)=>{ if(!count)return 'rgba(0,170,255,0.03)'; if(r>0)return `rgba(0,255,163,${Math.min(0.65,0.12+r*0.14)})`; return `rgba(255,34,85,${Math.min(0.6,0.12+Math.abs(r)*0.14)})`; };
 
   // Calendar helpers
@@ -463,119 +494,208 @@ export default function TradingJournal(){
 
       {/* ══ DASHBOARD ══════════════════════════════════════════════════════ */}
       {tab==='dashboard'&&(
-        <div className="fade-in">
+        <div className="fade-in" style={{display:'flex',flexDirection:'column',gap:12}}>
 
-          {/* HERO METRICS — FTMO style 4 cards */}
-          <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:10,marginBottom:14}}>
-            {[
-              {l:'R TOTAL',     v:fmtR(stats.totalR),    sub:stats.closedTrades+' trades fermés',  c:tc},
-              {l:'CE MOIS',     v:fmtR(stats.monthR),    sub:MONTHS_FR[new Date().getMonth()],     c:mc},
-              {l:"AUJOURD'HUI", v:fmtR(stats.todayR),    sub:stats.todayTrades.length+' trade(s)', c:stats.todayR>=0?'#00ffa3':'#ff2255'},
-              {l:'WIN RATE',    v:stats.winRate.toFixed(1)+'%', sub:stats.wins+'W · '+stats.losses+'L · '+stats.bes+'BE', c:'#00aaff'},
-            ].map((m,i)=>(
-              <div key={i} style={{background:'#060f1a',border:'1px solid rgba(0,170,255,0.09)',borderRadius:3,padding:'16px 18px',position:'relative',overflow:'hidden',transition:'border-color .2s'}}
-                onMouseEnter={e=>e.currentTarget.style.borderColor='rgba(0,170,255,0.22)'}
-                onMouseLeave={e=>e.currentTarget.style.borderColor='rgba(0,170,255,0.09)'}>
-                <div style={{position:'absolute',top:0,left:0,right:0,height:1,background:'linear-gradient(90deg,transparent,rgba(0,170,255,0.3),transparent)'}}/>
-                <div style={{fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:2.5,color:'#3a6b8a',textTransform:'uppercase',marginBottom:10}}>{m.l}</div>
-                <div style={{fontFamily:'Orbitron,sans-serif',fontSize:22,fontWeight:700,color:m.c,letterSpacing:.5,lineHeight:1}}>{m.v}</div>
-                <div style={{fontSize:9,color:'#2a4f68',marginTop:5}}>{m.sub}</div>
+          {/* ── ROW 1: 4 metric cards (MMplatinum style) ── */}
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 2fr 1fr',gap:10}}>
+
+            {/* R Total */}
+            <div style={{background:'#060f1a',border:'1px solid rgba(0,170,255,0.09)',borderRadius:3,padding:'14px 18px',position:'relative',overflow:'hidden'}}>
+              <div style={{position:'absolute',top:0,left:0,right:0,height:1,background:'linear-gradient(90deg,transparent,rgba(0,170,255,0.35),transparent)'}}/>
+              <div style={{fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:2,color:'#3a6b8a',textTransform:'uppercase',marginBottom:6}}>R TOTAL (TWR)</div>
+              <div style={{fontFamily:'Orbitron,sans-serif',fontSize:28,fontWeight:700,color:tc,lineHeight:1}}>{fmtR(stats.totalR)}</div>
+              <div style={{fontSize:9,color:'#2a4f68',marginTop:5}}>sur {stats.closedTrades} trades</div>
+            </div>
+
+            {/* Profit Factor */}
+            <div style={{background:'#060f1a',border:'1px solid rgba(0,170,255,0.09)',borderRadius:3,padding:'14px 18px',position:'relative',overflow:'hidden'}}>
+              <div style={{position:'absolute',top:0,left:0,right:0,height:1,background:'linear-gradient(90deg,transparent,rgba(0,170,255,0.35),transparent)'}}/>
+              <div style={{fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:2,color:'#3a6b8a',textTransform:'uppercase',marginBottom:6}}>PROFIT FACTOR</div>
+              <div style={{fontFamily:'Orbitron,sans-serif',fontSize:28,fontWeight:700,color:stats.pf>=1.5?'#00ffa3':stats.pf>=1?'#ffc800':'#ff2255',lineHeight:1}}>{stats.pf===99?'∞':stats.pf.toFixed(2)}</div>
+              <div style={{fontSize:9,color:'#2a4f68',marginTop:5}}>wins R / losses R</div>
+            </div>
+
+            {/* Win Rate — with gauge */}
+            <div style={{background:'#060f1a',border:'1px solid rgba(0,170,255,0.09)',borderRadius:3,padding:'14px 18px',position:'relative',overflow:'hidden',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+              <div style={{position:'absolute',top:0,left:0,right:0,height:1,background:'linear-gradient(90deg,transparent,rgba(0,170,255,0.35),transparent)'}}/>
+              <div>
+                <div style={{fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:2,color:'#3a6b8a',textTransform:'uppercase',marginBottom:6}}>WIN RATE %</div>
+                <div style={{fontFamily:'Orbitron,sans-serif',fontSize:32,fontWeight:700,color:stats.winRate>=50?'#00ffa3':'#ff2255',lineHeight:1}}>{stats.winRate.toFixed(1)}%</div>
+                <div style={{display:'flex',gap:12,marginTop:8}}>
+                  <div style={{fontSize:9,color:'#3a6b8a'}}>WINS <span style={{color:'#00ffa3',fontWeight:700,fontFamily:'Orbitron,sans-serif'}}>{stats.wins}</span></div>
+                  <div style={{fontSize:9,color:'#3a6b8a'}}>LOSSES <span style={{color:'#ff2255',fontWeight:700,fontFamily:'Orbitron,sans-serif'}}>{stats.losses}</span></div>
+                  <div style={{fontSize:9,color:'#3a6b8a'}}>BE <span style={{color:'#00aaff',fontWeight:700,fontFamily:'Orbitron,sans-serif'}}>{stats.bes}</span></div>
+                </div>
               </div>
-            ))}
+              <GaugeArc pct={stats.winRate/100} color={stats.winRate>=50?'#00ffa3':'#ff2255'} value={stats.winRate.toFixed(0)+'%'} sub="WIN RATE"/>
+            </div>
+
+            {/* Avg R */}
+            <div style={{background:'#060f1a',border:'1px solid rgba(0,170,255,0.09)',borderRadius:3,padding:'14px 18px',position:'relative',overflow:'hidden'}}>
+              <div style={{position:'absolute',top:0,left:0,right:0,height:1,background:'linear-gradient(90deg,transparent,rgba(0,170,255,0.35),transparent)'}}/>
+              <div style={{fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:2,color:'#3a6b8a',textTransform:'uppercase',marginBottom:6}}>AVG R / TRADE</div>
+              <div style={{fontFamily:'Orbitron,sans-serif',fontSize:28,fontWeight:700,color:stats.avgR>=0?'#00ffa3':'#ff2255',lineHeight:1}}>{fmtR(stats.avgR)}</div>
+              <div style={{fontSize:9,color:'#2a4f68',marginTop:5}}>EV: {fmtR(stats.ev)}</div>
+            </div>
           </div>
 
-          {/* EQUITY CURVE — full width, FTMO style avec lignes de référence */}
-          <div style={{background:'#060f1a',border:'1px solid rgba(0,170,255,0.09)',borderRadius:3,padding:16,marginBottom:14}}>
-            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14}}>
-              <div style={{fontFamily:'Orbitron,sans-serif',fontSize:9,letterSpacing:2.5,color:'#3a6b8a',textTransform:'uppercase'}}>◈ COURBE R CUMULATIF</div>
-              <div style={{display:'flex',gap:16,fontSize:9,fontFamily:'Share Tech Mono,monospace'}}>
-                <span style={{color:'rgba(0,255,163,0.6)'}}>— Target: {fmtR(obj.targetR)}</span>
-                <span style={{color:'rgba(255,34,85,0.6)'}}>— DD Max: {fmtR(obj.totalDDR)}</span>
-                <span style={{color:'rgba(255,200,0,0.6)'}}>— DD Jour: {fmtR(obj.dailyDDR)}</span>
+          {/* ── ROW 2: Equity curve + Calendar ── */}
+          <div style={{display:'grid',gridTemplateColumns:'3fr 2fr',gap:12}}>
+
+            {/* R Curve */}
+            <div style={{background:'#060f1a',border:'1px solid rgba(0,170,255,0.09)',borderRadius:3,padding:'16px'}}>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12}}>
+                <div style={{fontFamily:'Orbitron,sans-serif',fontSize:9,letterSpacing:2,color:'#3a6b8a',textTransform:'uppercase'}}>COURBE R CUMULATIF</div>
+                <div style={{display:'flex',gap:14,fontSize:9,fontFamily:'Share Tech Mono,monospace'}}>
+                  <span style={{color:'rgba(0,255,163,0.6)'}}>— Target</span>
+                  <span style={{color:'rgba(255,34,85,0.6)'}}>— DD Max</span>
+                </div>
               </div>
+              {stats.curve.length>0?(
+                <ResponsiveContainer width="100%" height={200}>
+                  <AreaChart data={stats.curve} margin={{top:4,right:4,bottom:0,left:0}}>
+                    <defs><linearGradient id="rg" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={tc} stopOpacity={0.25}/><stop offset="95%" stopColor={tc} stopOpacity={0}/></linearGradient></defs>
+                    <XAxis dataKey="label" tick={{fill:'#3a6b8a',fontSize:9,fontFamily:'Share Tech Mono'}} axisLine={false} tickLine={false} interval="preserveStartEnd"/>
+                    <YAxis tick={{fill:'#3a6b8a',fontSize:9,fontFamily:'Share Tech Mono'}} axisLine={false} tickLine={false} tickFormatter={v=>(v>=0?'+':'')+v.toFixed(0)+'R'} width={42}/>
+                    <Tooltip content={<CyTooltip/>}/>
+                    <ReferenceLine y={0} stroke="rgba(255,255,255,0.06)" strokeDasharray="4 4"/>
+                    <ReferenceLine y={obj.targetR}  stroke="rgba(0,255,163,0.25)"  strokeDasharray="6 3"/>
+                    <ReferenceLine y={obj.totalDDR} stroke="rgba(255,34,85,0.25)"  strokeDasharray="6 3"/>
+                    <Area type="monotone" dataKey="cumR" stroke={tc} strokeWidth={2.5} fill="url(#rg)" dot={false} activeDot={{r:4,fill:tc}}/>
+                  </AreaChart>
+                </ResponsiveContainer>
+              ):<div style={{height:200,display:'flex',alignItems:'center',justifyContent:'center',color:'#3a6b8a',fontFamily:'Orbitron,sans-serif',fontSize:10,letterSpacing:2}}>AUCUNE DONNÉE</div>}
             </div>
-            {stats.curve.length>0?(
-              <ResponsiveContainer width="100%" height={240}>
-                <AreaChart data={stats.curve} margin={{top:8,right:8,bottom:0,left:0}}>
-                  <defs>
-                    <linearGradient id="rg" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%"  stopColor={tc} stopOpacity={0.22}/>
-                      <stop offset="95%" stopColor={tc} stopOpacity={0}/>
-                    </linearGradient>
-                  </defs>
-                  <XAxis dataKey="label" tick={{fill:'#3a6b8a',fontSize:9,fontFamily:'Share Tech Mono'}} axisLine={false} tickLine={false} interval="preserveStartEnd"/>
-                  <YAxis tick={{fill:'#3a6b8a',fontSize:9,fontFamily:'Share Tech Mono'}} axisLine={false} tickLine={false} tickFormatter={v=>(v>=0?'+':'')+v.toFixed(0)+'R'} width={48}/>
-                  <Tooltip content={<CyTooltip/>}/>
-                  <ReferenceLine y={0}             stroke="rgba(255,255,255,0.06)" strokeDasharray="4 4"/>
-                  <ReferenceLine y={obj.targetR}   stroke="rgba(0,255,163,0.3)"   strokeDasharray="6 3" label={{value:'Target',fill:'rgba(0,255,163,0.5)',fontSize:8,fontFamily:'Orbitron,sans-serif'}}/>
-                  <ReferenceLine y={obj.totalDDR}  stroke="rgba(255,34,85,0.3)"   strokeDasharray="6 3" label={{value:'DD Max',fill:'rgba(255,34,85,0.5)',fontSize:8,fontFamily:'Orbitron,sans-serif'}}/>
-                  <ReferenceLine y={obj.dailyDDR}  stroke="rgba(255,200,0,0.2)"   strokeDasharray="3 3"/>
-                  <Area type="monotone" dataKey="cumR" stroke={tc} strokeWidth={2.5} fill="url(#rg)" dot={false} activeDot={{r:4,fill:tc,stroke:'#060f1a',strokeWidth:2}}/>
-                </AreaChart>
+
+            {/* Calendar compact */}
+            <div style={{background:'#060f1a',border:'1px solid rgba(0,170,255,0.09)',borderRadius:3,padding:'14px'}}>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}}>
+                <div style={{fontFamily:'Orbitron,sans-serif',fontSize:9,letterSpacing:2,color:'#3a6b8a',textTransform:'uppercase'}}>{MONTHS_FR[calMonth-1].toUpperCase()} {calYear}</div>
+                <div style={{fontFamily:'Orbitron,sans-serif',fontSize:10,color:stats.monthR>=0?'#00ffa3':'#ff2255',fontWeight:700}}>{fmtR(stats.monthR)}</div>
+              </div>
+              {(()=>{
+                const yr=calYear, mo=calMonth-1;
+                const first=new Date(yr,mo,1).getDay(), days=new Date(yr,mo+1,0).getDate();
+                const dayMap={};
+                Object.entries(stats.byDate||{}).forEach(([d,v])=>{ const dt=new Date(d+'T12:00:00'); if(dt.getFullYear()===yr&&dt.getMonth()===mo) dayMap[dt.getDate()]=v; });
+                const cells=[];
+                for(let i=0;i<first;i++) cells.push(null);
+                for(let d=1;d<=days;d++) cells.push(d);
+                const today2=new Date(), isToday=d=>d&&yr===today2.getFullYear()&&mo===today2.getMonth()&&d===today2.getDate();
+                return(
+                  <div>
+                    <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:2,marginBottom:4}}>
+                      {['D','L','M','M','J','V','S'].map((d,i)=><div key={i} style={{textAlign:'center',fontFamily:'Orbitron,sans-serif',fontSize:7,color:'#2a4f68',padding:'2px 0'}}>{d}</div>)}
+                    </div>
+                    <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:2}}>
+                      {cells.map((d,i)=>{
+                        const v=d?dayMap[d]:null;
+                        const bg=!d?'transparent':v?v.r>0?`rgba(0,255,163,${Math.min(0.5,0.1+Math.abs(v.r)*0.1)})`:v.r<0?`rgba(255,34,85,${Math.min(0.45,0.1+Math.abs(v.r)*0.1)})`:'rgba(0,170,255,0.08)':'rgba(0,170,255,0.04)';
+                        return(
+                          <div key={i} onClick={()=>{ if(d&&v) setCalDay(prev=>prev===String(yr+'-'+(mo+1<10?'0':'')+(mo+1)+'-'+(d<10?'0':'')+d)?null:yr+'-'+(mo+1<10?'0':'')+(mo+1)+'-'+(d<10?'0':'')+d); }}
+                            style={{background:bg,borderRadius:2,padding:'3px 2px',textAlign:'center',cursor:d?'pointer':'default',border:isToday(d)?'1px solid rgba(0,170,255,0.5)':'1px solid transparent',minHeight:32}}>
+                            {d&&<><div style={{fontSize:8,color:v?v.r>0?'#00ffa3':v.r<0?'#ff2255':'#00aaff':'#2a4f68',fontFamily:'Orbitron,sans-serif'}}>{d}</div>
+                            {v&&<div style={{fontSize:7,color:v.r>0?'#00ffa3':'#ff2255',fontWeight:700,fontFamily:'Share Tech Mono,monospace'}}>{v.r>0?'+':''}{v.r.toFixed(1)}</div>}</>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+
+          {/* ── ROW 3: Last 20 history + Nexus Score + Last 30 trades ── */}
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12}}>
+
+            {/* Discipline / Trade History */}
+            <div style={{background:'#060f1a',border:'1px solid rgba(0,170,255,0.09)',borderRadius:3,padding:'14px'}}>
+              <div style={{fontFamily:'Orbitron,sans-serif',fontSize:9,letterSpacing:2,color:'#3a6b8a',textTransform:'uppercase',marginBottom:12}}>HISTORIQUE — 20 DERNIERS</div>
+              {stats.last30.length>0?(
+                <div>
+                  <ResponsiveContainer width="100%" height={120}>
+                    <BarChart data={stats.last30.slice(-20)} margin={{top:4,right:0,bottom:0,left:0}} barCategoryGap="10%">
+                      <XAxis dataKey="i" tick={{fill:'#3a6b8a',fontSize:8,fontFamily:'Share Tech Mono'}} axisLine={false} tickLine={false} hide/>
+                      <YAxis axisLine={false} tickLine={false} tick={{fill:'#3a6b8a',fontSize:8}} width={24} tickFormatter={v=>(v>0?'+':'')+v.toFixed(0)}/>
+                      <ReferenceLine y={0} stroke="rgba(255,255,255,0.08)"/>
+                      <Tooltip formatter={v=>[fmtR(v),'R']} contentStyle={{background:'#060f1a',border:'1px solid rgba(0,170,255,0.2)',fontFamily:'Share Tech Mono,monospace',fontSize:10}}/>
+                      <Bar dataKey="r" radius={[2,2,0,0]}>
+                        {stats.last30.slice(-20).map((e,i)=><Cell key={i} fill={e.r>0?'#00ffa3':e.r<0?'#ff2255':'#00aaff'} fillOpacity={0.8}/>)}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                  <div style={{display:'flex',justifyContent:'space-between',marginTop:8,paddingTop:8,borderTop:'1px solid rgba(0,170,255,0.07)'}}>
+                    <div style={{fontSize:9,color:'#3a6b8a'}}>MAX WIN STREAK <span style={{color:'#00ffa3',fontFamily:'Orbitron,sans-serif'}}>{stats.maxWin}</span></div>
+                    <div style={{fontSize:9,color:'#3a6b8a'}}>MAX LOSS <span style={{color:'#ff2255',fontFamily:'Orbitron,sans-serif'}}>{stats.maxLoss}</span></div>
+                  </div>
+                </div>
+              ):<div style={{height:120,display:'flex',alignItems:'center',justifyContent:'center',color:'#3a6b8a',fontSize:10}}>AUCUNE DONNÉE</div>}
+            </div>
+
+            {/* Nexus Score — Radar */}
+            <div style={{background:'#060f1a',border:'1px solid rgba(0,170,255,0.09)',borderRadius:3,padding:'14px',display:'flex',flexDirection:'column',alignItems:'center'}}>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',width:'100%',marginBottom:6}}>
+                <div style={{fontFamily:'Orbitron,sans-serif',fontSize:9,letterSpacing:2,color:'#3a6b8a',textTransform:'uppercase'}}>NEXUS SCORE</div>
+                <div style={{fontFamily:'Orbitron,sans-serif',fontSize:14,fontWeight:700,color:'#00aaff'}}>{stats.nexusScore.total}<span style={{fontSize:9,color:'#3a6b8a'}}>/25</span></div>
+              </div>
+              {/* Score bar */}
+              <div style={{width:'100%',height:4,background:'rgba(0,170,255,0.1)',borderRadius:2,marginBottom:12}}>
+                <div style={{height:'100%',width:(stats.nexusScore.total/25*100)+'%',background:'linear-gradient(90deg,#00aaff,#00ffa3)',borderRadius:2,transition:'width .5s'}}/>
+              </div>
+              <ResponsiveContainer width="100%" height={140}>
+                <RadarChart data={[
+                  {subject:'Win Rate', A:stats.nexusScore.wr,   fullMark:5},
+                  {subject:'Prof. Factor', A:stats.nexusScore.pf,  fullMark:5},
+                  {subject:'Avg R',     A:stats.nexusScore.avgr, fullMark:5},
+                  {subject:'Streak',    A:stats.nexusScore.str,  fullMark:5},
+                  {subject:'Volume',    A:stats.nexusScore.con,  fullMark:5},
+                ]}>
+                  <PolarGrid stroke="rgba(0,170,255,0.12)" strokeDasharray="3 3"/>
+                  <PolarAngleAxis dataKey="subject" tick={{fill:'#3a6b8a',fontFamily:'Share Tech Mono,monospace',fontSize:8}}/>
+                  <Radar name="score" dataKey="A" stroke="#00aaff" fill="#00aaff" fillOpacity={0.15} strokeWidth={1.5}/>
+                </RadarChart>
               </ResponsiveContainer>
-            ):<div style={{height:240,display:'flex',alignItems:'center',justifyContent:'center',color:'#3a6b8a',fontSize:11,fontFamily:'Orbitron,sans-serif',letterSpacing:2}}>AUCUNE DONNÉE — AJOUTE TES PREMIERS TRADES</div>}
-          </div>
-
-          {/* ROW 2: Objectives + Advanced stats — FTMO Statistiques style */}
-          <div style={{display:'grid',gridTemplateColumns:'1fr 2fr',gap:12,marginBottom:14}}>
-
-            {/* Objectives panel */}
-            <div style={{background:'#060f1a',border:'1px solid rgba(0,170,255,0.09)',borderRadius:3,padding:16}}>
-              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14}}>
-                <div style={{fontFamily:'Orbitron,sans-serif',fontSize:9,letterSpacing:2.5,color:'#3a6b8a',textTransform:'uppercase'}}>◈ OBJECTIFS</div>
-                <button onClick={()=>{setObjForm(obj);setShowObj(true);}} style={{background:'transparent',border:'1px solid rgba(0,170,255,0.2)',color:'#3a6b8a',fontFamily:'Orbitron,sans-serif',fontSize:7,letterSpacing:1,padding:'3px 8px',cursor:'pointer',borderRadius:2,transition:'all .15s'}} onMouseEnter={e=>{e.currentTarget.style.color='#00aaff';e.currentTarget.style.borderColor='rgba(0,170,255,0.4)';}} onMouseLeave={e=>{e.currentTarget.style.color='#3a6b8a';e.currentTarget.style.borderColor='rgba(0,170,255,0.2)';}}>⚙ ÉDITER</button>
-              </div>
-              <ProgressBar label="🎯 Objectif mensuel" current={stats.monthR} target={obj.targetR} color='#00ffa3' sublabel={fmtR(stats.monthR)+' / '+fmtR(obj.targetR)}/>
-              <ProgressBar label="⚠ DD journalier"    current={Math.min(0,stats.todayR)} target={obj.dailyDDR} color='#ffc800' sublabel={fmtR(Math.min(0,stats.todayR))+' / '+fmtR(obj.dailyDDR)}/>
-              <ProgressBar label="🛑 DD total max"     current={Math.min(0,stats.minCumR)} target={obj.totalDDR} color='#ff2255' sublabel={fmtR(Math.min(0,stats.minCumR))+' / '+fmtR(obj.totalDDR)}/>
-              <div style={{paddingTop:12,borderTop:'1px solid rgba(0,170,255,0.07)',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-                <div style={{fontSize:9,color:'#3a6b8a',fontFamily:'Orbitron,sans-serif',letterSpacing:1}}>STREAK</div>
-                <div style={{fontFamily:'Orbitron,sans-serif',fontSize:18,fontWeight:900,color:sc}}>{stats.curStreak===0?'—':(stats.curStreak>0?'+':'')+stats.curStreak}</div>
-              </div>
-            </div>
-
-            {/* FTMO-style statistics grid */}
-            <div style={{background:'#060f1a',border:'1px solid rgba(0,170,255,0.09)',borderRadius:3,padding:16}}>
-              <div style={{fontFamily:'Orbitron,sans-serif',fontSize:9,letterSpacing:2.5,color:'#3a6b8a',textTransform:'uppercase',marginBottom:14}}>◈ STATISTIQUES</div>
-              <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8}}>
-                {[
-                  {l:'Profit moyen',  v:fmtR(stats.ev>0?stats.ev:0),        c:'#00ffa3'},
-                  {l:'Perte moyenne', v:fmtR(stats.ev<0?stats.ev:-(stats.avgR<0?Math.abs(stats.avgR):0)), c:'#ff2255'},
-                  {l:'Taux réussite', v:stats.winRate.toFixed(1)+'%',         c:stats.winRate>=50?'#00ffa3':'#ff2255'},
-                  {l:'Nb de trades',  v:stats.totalTrades,                   c:'#c5e8ff'},
-                  {l:'Break Even',    v:stats.bes+' trade'+(stats.bes>1?'s':''), c:'#00aaff'},
-                  {l:'Sharpe Ratio',  v:stats.sharpe.toFixed(2),              c:stats.sharpe>0?'#00ffa3':'#ff2255'},
-                  {l:'Valeur attendue',v:fmtR(stats.ev),                     c:stats.ev>=0?'#00ffa3':'#ff2255'},
-                  {l:'Facteur profit',v:stats.pf===99?'∞':stats.pf.toFixed(2),c:stats.pf>=1?'#00ffa3':'#ff2255'},
-                  {l:'Avg R',        v:fmtR(stats.avgR),                     c:stats.avgR>=0?'#00ffa3':'#ff2255'},
-                  {l:'Positions live',v:stats.openTrades,                    c:'#ffc800'},
-                ].map((m,i)=>(
-                  <div key={i} style={{background:'#081625',border:'1px solid rgba(0,170,255,0.06)',borderRadius:2,padding:'10px 12px'}}>
-                    <div style={{fontFamily:'Orbitron,sans-serif',fontSize:7,letterSpacing:1.5,color:'#2a4f68',textTransform:'uppercase',marginBottom:5}}>{m.l}</div>
-                    <div style={{fontFamily:'Orbitron,sans-serif',fontSize:14,fontWeight:700,color:m.c}}>{m.v}</div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,width:'100%',marginTop:4}}>
+                {[['Win Rate',stats.nexusScore.wr],['Prof. Factor',stats.nexusScore.pf],['Avg R',stats.nexusScore.avgr],['Streak',stats.nexusScore.str],['Volume',stats.nexusScore.con]].map(([l,v],i)=>(
+                  <div key={i} style={{display:'flex',justifyContent:'space-between',fontSize:8,color:'#3a6b8a',background:'rgba(0,170,255,0.04)',borderRadius:2,padding:'3px 6px'}}>
+                    <span>{l}</span><span style={{color:'#00aaff',fontFamily:'Orbitron,sans-serif'}}>{v}/5</span>
                   </div>
                 ))}
               </div>
             </div>
+
+            {/* Last 30 trades detail */}
+            <div style={{background:'#060f1a',border:'1px solid rgba(0,170,255,0.09)',borderRadius:3,padding:'14px'}}>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12}}>
+                <div style={{fontFamily:'Orbitron,sans-serif',fontSize:9,letterSpacing:2,color:'#3a6b8a',textTransform:'uppercase'}}>30 DERNIERS TRADES</div>
+                <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                  <span style={{fontSize:9,color:'#00ffa3'}}>Abs.</span>
+                  <span style={{fontSize:9,color:'#2a4f68'}}>% R</span>
+                </div>
+              </div>
+              {stats.last30.length>0?(
+                <ResponsiveContainer width="100%" height={150}>
+                  <BarChart data={stats.last30} margin={{top:4,right:0,bottom:0,left:0}} barCategoryGap="8%">
+                    <XAxis dataKey="i" hide/>
+                    <YAxis axisLine={false} tickLine={false} tick={{fill:'#3a6b8a',fontSize:8}} width={26} tickFormatter={v=>(v>0?'+':'')+v.toFixed(0)+'R'}/>
+                    <ReferenceLine y={0} stroke="rgba(255,255,255,0.08)"/>
+                    <Tooltip formatter={v=>[fmtR(v),'R']} contentStyle={{background:'#060f1a',border:'1px solid rgba(0,170,255,0.2)',fontFamily:'Share Tech Mono,monospace',fontSize:10}}/>
+                    <Bar dataKey="r" radius={[2,2,0,0]}>
+                      {stats.last30.map((e,i)=><Cell key={i} fill={e.r>0?'#00ffa3':e.r<0?'#ff2255':'#00aaff'} fillOpacity={0.75}/>)}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              ):<div style={{height:150,display:'flex',alignItems:'center',justifyContent:'center',color:'#3a6b8a',fontSize:10}}>AUCUNE DONNÉE</div>}
+              <div style={{marginTop:8,paddingTop:8,borderTop:'1px solid rgba(0,170,255,0.07)',fontSize:9,color:'#3a6b8a',textAlign:'center'}}>
+                Avg récent : <span style={{color:stats.last30.length?stats.last30.slice(-10).reduce((a,b)=>a+b.r,0)/Math.min(10,stats.last30.length)>=0?'#00ffa3':'#ff2255':'#3a6b8a',fontFamily:'Orbitron,sans-serif',fontWeight:700}}>{stats.last30.length?fmtR(stats.last30.slice(-10).reduce((a,b)=>a+b.r,0)/Math.min(10,stats.last30.length)):'—'}</span> / 10 derniers
+              </div>
+            </div>
           </div>
 
-          {/* Recent trades */}
-          <div style={{background:'#060f1a',border:'1px solid rgba(0,170,255,0.09)',borderRadius:3,padding:16}}>
-            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14}}>
-              <div style={{fontFamily:'Orbitron,sans-serif',fontSize:9,letterSpacing:2.5,color:'#3a6b8a',textTransform:'uppercase'}}>◈ TRADES RÉCENTS</div>
-              {trades.length>5&&<button onClick={()=>setTab('journal')} style={{background:'transparent',border:'none',color:'#3a6b8a',fontSize:10,cursor:'pointer',fontFamily:'Share Tech Mono,monospace',transition:'color .2s'}} onMouseEnter={e=>e.target.style.color='#00aaff'} onMouseLeave={e=>e.target.style.color='#3a6b8a'}>→ Voir les {trades.length} trades</button>}
-            </div>
-            <div style={{overflowX:'auto'}}>
-              <table style={{width:'100%',borderCollapse:'collapse'}}>
-                <thead><tr>{baseCols.map(c=><TH key={c.k} col={c}/>)}</tr></thead>
-                <tbody>{filtered.slice(0,6).map(t=>renderRow(t,baseCols))}</tbody>
-              </table>
-            </div>
-          </div>
         </div>
       )}
 
-      {/* ══ JOURNAL ════════════════════════════════════════════════════════ */}
       {tab==='journal'&&(
         <div className="fade-in">
           <div style={{background:'#060f1a',border:'1px solid rgba(0,170,255,0.09)',borderRadius:3,padding:16}}>
@@ -840,6 +960,173 @@ export default function TradingJournal(){
         </div>
       )}
 
+      {/* ══ SYSTÈME ═════════════════════════════════════════════════════ */}
+      {tab==='système'&&(
+        <div className="fade-in" style={{display:'flex',flexDirection:'column',gap:12}}>
+
+          {/* Header */}
+          <div style={{background:'linear-gradient(135deg,rgba(0,170,255,0.08) 0%,rgba(0,40,100,0.12) 100%)',border:'1px solid rgba(0,170,255,0.2)',borderRadius:3,padding:'20px 24px',display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:12}}>
+            <div>
+              <div style={{fontFamily:'Orbitron,sans-serif',fontSize:16,fontWeight:900,letterSpacing:3,color:'#00aaff',marginBottom:4}}>◈ RED PILE FX</div>
+              <div style={{fontSize:10,color:'#3a6b8a',fontFamily:'Share Tech Mono,monospace'}}>NAS100 / SPX500 · Smart Money Concepts · Système Mixte</div>
+            </div>
+            <div style={{display:'flex',alignItems:'center',gap:10}}>
+              {sysSaved&&<div style={{fontFamily:'Orbitron,sans-serif',fontSize:9,color:'#00ffa3',letterSpacing:1}}>✓ SAUVEGARDÉ</div>}
+              <button onClick={()=>{try{localStorage.setItem('nexus-system',JSON.stringify(sysNotes));}catch{} setSysSaved(true);setTimeout(()=>setSysSaved(false),2500);}}
+                style={{background:'rgba(0,170,255,0.1)',border:'1px solid #00aaff',color:'#00aaff',fontFamily:'Orbitron,sans-serif',fontSize:9,letterSpacing:2,padding:'8px 18px',cursor:'pointer',borderRadius:2,textTransform:'uppercase'}}>
+                💾 SAUVEGARDER
+              </button>
+            </div>
+          </div>
+
+          {/* Row 1 — Quand + Marchés */}
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+
+            <div style={{background:'#060f1a',border:'1px solid rgba(0,170,255,0.09)',borderRadius:3,padding:16}}>
+              <div style={{fontFamily:'Orbitron,sans-serif',fontSize:9,letterSpacing:2,color:'#00aaff',textTransform:'uppercase',marginBottom:14}}>🕐 ① QUAND TRADER ?</div>
+              {[['Sessions','NY Open (14h–17h LUX) · LN/NY Overlap'],['Timeframes','HTF : H4 / Daily — Exécution : M5 / M15'],['Disponibilité','2h – 4h par jour'],['Style','Day Trader (ouvert & fermé dans la journée)']].map(([l,v],i)=>(
+                <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',padding:'7px 0',borderBottom:'1px solid rgba(0,170,255,0.06)'}}>
+                  <span style={{fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:1,color:'#3a6b8a',textTransform:'uppercase',flexShrink:0,marginRight:8}}>{l}</span>
+                  <span style={{fontSize:10,color:'#c5e8ff',textAlign:'right'}}>{v}</span>
+                </div>
+              ))}
+              <div style={{marginTop:12}}>
+                <div style={{fontFamily:'Orbitron,sans-serif',fontSize:7,letterSpacing:2,color:'#2a4f68',marginBottom:5,textTransform:'uppercase'}}>Mes notes perso</div>
+                <textarea value={sysNotes.quand||''} onChange={e=>setSysNotes(n=>Object.assign({},n,{quand:e.target.value}))} rows={3}
+                  placeholder="Mes horaires précis, routines, alertes..."
+                  style={{width:'100%',background:'#081625',border:'1px solid rgba(0,170,255,0.1)',color:'#c5e8ff',fontFamily:'Share Tech Mono,monospace',fontSize:11,padding:'8px',borderRadius:2,outline:'none',resize:'vertical',boxSizing:'border-box'}}/>
+              </div>
+            </div>
+
+            <div style={{background:'#060f1a',border:'1px solid rgba(0,170,255,0.09)',borderRadius:3,padding:16}}>
+              <div style={{fontFamily:'Orbitron,sans-serif',fontSize:9,letterSpacing:2,color:'#ffc800',textTransform:'uppercase',marginBottom:14}}>📈 ② MARCHÉS TRADÉS</div>
+              {[['Instruments','NAS100 (priorité) · SPX500 (setup A+)'],['Catégorie','Indices US — Futures / CFD'],['Focus','2 actifs max — spécialisation'],['Corrélation','Surveiller les 2 pour confirmer le biais']].map(([l,v],i)=>(
+                <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',padding:'7px 0',borderBottom:'1px solid rgba(0,170,255,0.06)'}}>
+                  <span style={{fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:1,color:'#3a6b8a',textTransform:'uppercase',flexShrink:0,marginRight:8}}>{l}</span>
+                  <span style={{fontSize:10,color:'#c5e8ff',textAlign:'right'}}>{v}</span>
+                </div>
+              ))}
+              <div style={{marginTop:12}}>
+                <div style={{fontFamily:'Orbitron,sans-serif',fontSize:7,letterSpacing:2,color:'#2a4f68',marginBottom:5,textTransform:'uppercase'}}>Mes notes perso</div>
+                <textarea value={sysNotes.marches||''} onChange={e=>setSysNotes(n=>Object.assign({},n,{marches:e.target.value}))} rows={3}
+                  placeholder="Broker, spreads, heures de volatilité..."
+                  style={{width:'100%',background:'#081625',border:'1px solid rgba(0,170,255,0.1)',color:'#c5e8ff',fontFamily:'Share Tech Mono,monospace',fontSize:11,padding:'8px',borderRadius:2,outline:'none',resize:'vertical',boxSizing:'border-box'}}/>
+              </div>
+            </div>
+          </div>
+
+          {/* Row 2 — Confluences full width */}
+          <div style={{background:'#060f1a',border:'1px solid rgba(0,170,255,0.09)',borderRadius:3,padding:16}}>
+            <div style={{fontFamily:'Orbitron,sans-serif',fontSize:9,letterSpacing:2,color:'#00ffa3',textTransform:'uppercase',marginBottom:14}}>🎯 ③ CONFLUENCES & SETUP</div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:10,marginBottom:14}}>
+              {[
+                {n:'1 · BIAIS',      c:'rgba(0,170,255,0.08)',b:'rgba(0,170,255,0.2)', t:'#00aaff',  desc:'Direction globale marché',   detail:'H4/Daily — 2 cassures EPA haussières ou baissières. Breaker block.'},
+                {n:'2 · MACRO ZONE', c:'rgba(255,200,0,0.06)', b:'rgba(255,200,0,0.2)', t:'#ffc800',  desc:"Zone d'intérêt principale", detail:'Zone EPA — cadrer la zone dans laquelle on veut agir.'},
+                {n:'3 · MICRO ZONE', c:'rgba(0,255,163,0.06)', b:'rgba(0,255,163,0.2)', t:'#00ffa3',  desc:'Localisation précise',       detail:'M5/M15 — Mèche de liquidation, Order Block, micro-structure.'},
+                {n:'4 · ENTRÉE',     c:'rgba(255,34,85,0.06)',  b:'rgba(255,34,85,0.2)', t:'#ff2255',  desc:"Modèle d'exécution",       detail:'Market Shift M5/M15. SL sous/sur micro zone. TP next HTF.'},
+              ].map((s,i)=>(
+                <div key={i} style={{background:s.c,border:'1px solid '+s.b,borderRadius:3,padding:'12px 14px'}}>
+                  <div style={{fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:2,color:s.t,textTransform:'uppercase',marginBottom:6}}>{s.n}</div>
+                  <div style={{fontSize:10,color:'#c5e8ff',fontWeight:600,marginBottom:4}}>{s.desc}</div>
+                  <div style={{fontSize:10,color:'#3a6b8a',lineHeight:1.7}}>{s.detail}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{fontFamily:'Orbitron,sans-serif',fontSize:7,letterSpacing:2,color:'#2a4f68',marginBottom:5,textTransform:'uppercase'}}>Mes confluences perso</div>
+            <textarea value={sysNotes.confluences||''} onChange={e=>setSysNotes(n=>Object.assign({},n,{confluences:e.target.value}))} rows={3}
+              placeholder="Règles supplémentaires, filtres, patterns spécifiques à mon setup Red Pile FX..."
+              style={{width:'100%',background:'#081625',border:'1px solid rgba(0,170,255,0.1)',color:'#c5e8ff',fontFamily:'Share Tech Mono,monospace',fontSize:11,padding:'8px',borderRadius:2,outline:'none',resize:'vertical',boxSizing:'border-box'}}/>
+          </div>
+
+          {/* Row 3 — MM + Type système */}
+          <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:12}}>
+
+            <div style={{background:'#060f1a',border:'1px solid rgba(0,170,255,0.09)',borderRadius:3,padding:16}}>
+              <div style={{fontFamily:'Orbitron,sans-serif',fontSize:9,letterSpacing:2,color:'#00ffa3',textTransform:'uppercase',marginBottom:14}}>💰 ④ MONEY MANAGEMENT & EXITS</div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:8,marginBottom:12}}>
+                {[
+                  {l:'Risk/trade',    v:'1R',      c:'#00aaff', sub:'Discipline absolue'},
+                  {l:'R:R minimum',   v:'1.5R',    c:'#00ffa3', sub:'Pas en-dessous'},
+                  {l:'DD journalier', v:'-3R',     c:'#ff2255', sub:'Stop si atteint'},
+                  {l:'Max trades/j',  v:'3',       c:'#ffc800', sub:'Au-delà = over'},
+                ].map((m,i)=>(
+                  <div key={i} style={{background:'#081625',border:'1px solid rgba(0,170,255,0.07)',borderRadius:2,padding:'10px 12px'}}>
+                    <div style={{fontFamily:'Orbitron,sans-serif',fontSize:7,letterSpacing:1.5,color:'#2a4f68',textTransform:'uppercase',marginBottom:5}}>{m.l}</div>
+                    <div style={{fontFamily:'Orbitron,sans-serif',fontSize:18,fontWeight:700,color:m.c}}>{m.v}</div>
+                    <div style={{fontSize:8,color:'#2a4f68',marginTop:3}}>{m.sub}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{background:'rgba(0,255,163,0.04)',border:'1px solid rgba(0,255,163,0.1)',borderRadius:2,padding:'9px 12px',marginBottom:10,fontSize:10,color:'#3a6b8a',lineHeight:1.8}}>
+                <span style={{fontFamily:'Orbitron,sans-serif',fontSize:8,color:'#00ffa3',letterSpacing:1}}>EXIT PROCESS · </span>
+                Next HTF structure → partial 70%. Si setup opposé → partial 90%. Exit liquidité process.
+              </div>
+              <div style={{fontFamily:'Orbitron,sans-serif',fontSize:7,letterSpacing:2,color:'#2a4f68',marginBottom:5,textTransform:'uppercase'}}>Mes règles MM perso</div>
+              <textarea value={sysNotes.mm||''} onChange={e=>setSysNotes(n=>Object.assign({},n,{mm:e.target.value}))} rows={3}
+                placeholder="Taille de position exacte, règles de scaling, règles après série de pertes..."
+                style={{width:'100%',background:'#081625',border:'1px solid rgba(0,170,255,0.1)',color:'#c5e8ff',fontFamily:'Share Tech Mono,monospace',fontSize:11,padding:'8px',borderRadius:2,outline:'none',resize:'vertical',boxSizing:'border-box'}}/>
+            </div>
+
+            <div style={{background:'#060f1a',border:'1px solid rgba(0,170,255,0.09)',borderRadius:3,padding:16}}>
+              <div style={{fontFamily:'Orbitron,sans-serif',fontSize:9,letterSpacing:2,color:'#ffc800',textTransform:'uppercase',marginBottom:14}}>🔧 ⑤ TYPE SYSTÈME</div>
+              {[
+                {l:'Manuel',    desc:'Ressenti + expérience', active:false},
+                {l:'Mécanique', desc:'Règles fixes, zéro discrétion', active:false},
+                {l:'Mixte',     desc:'Lecture HTF + exécution sur règles LTF', active:true},
+              ].map((r,i)=>(
+                <div key={i} style={{padding:'9px 12px',marginBottom:7,background:r.active?'rgba(255,200,0,0.08)':'rgba(0,0,0,0.12)',border:'1px solid '+(r.active?'rgba(255,200,0,0.3)':'rgba(0,170,255,0.06)'),borderRadius:2,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                  <div>
+                    <div style={{fontFamily:'Orbitron,sans-serif',fontSize:9,color:r.active?'#ffc800':'#3a6b8a',letterSpacing:1,marginBottom:2}}>{r.l}</div>
+                    <div style={{fontSize:9,color:'#2a4f68',lineHeight:1.4}}>{r.desc}</div>
+                  </div>
+                  {r.active&&<div style={{width:7,height:7,borderRadius:'50%',background:'#ffc800',flexShrink:0}}/>}
+                </div>
+              ))}
+              <div style={{marginTop:10}}>
+                <div style={{fontFamily:'Orbitron,sans-serif',fontSize:7,letterSpacing:2,color:'#2a4f68',marginBottom:5,textTransform:'uppercase'}}>Notes</div>
+                <textarea value={sysNotes.systeme||''} onChange={e=>setSysNotes(n=>Object.assign({},n,{systeme:e.target.value}))} rows={3}
+                  placeholder="Ce qui est fixe vs discrétionnaire dans mon système..."
+                  style={{width:'100%',background:'#081625',border:'1px solid rgba(0,170,255,0.1)',color:'#c5e8ff',fontFamily:'Share Tech Mono,monospace',fontSize:11,padding:'8px',borderRadius:2,outline:'none',resize:'vertical',boxSizing:'border-box'}}/>
+              </div>
+            </div>
+          </div>
+
+          {/* Row 4 — Plan hypothèse + variables */}
+          <div style={{background:'#060f1a',border:'1px solid rgba(0,170,255,0.09)',borderRadius:3,padding:16}}>
+            <div style={{fontFamily:'Orbitron,sans-serif',fontSize:9,letterSpacing:2,color:'#00aaff',textTransform:'uppercase',marginBottom:14}}>📋 ⑥ PLAN TRADING — HYPOTHÈSE & RÈGLES</div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:10,marginBottom:14}}>
+              {[
+                {l:'Hypothèse',    c:'rgba(0,170,255,0.06)',  b:'rgba(0,170,255,0.15)',  t:'#00aaff', desc:"Plan = hypothèse testable sur ce que le marché va faire. Sans testabilité → aucune valeur."},
+                {l:'Règles fixes', c:'rgba(0,255,163,0.06)',  b:'rgba(0,255,163,0.15)',  t:'#00ffa3', desc:"Chaque plan repose sur des règles claires. Plus elles sont précises, plus l'exécution est objective."},
+                {l:'Confluences',  c:'rgba(255,200,0,0.06)',  b:'rgba(255,200,0,0.15)',  t:'#ffc800', desc:"Augmentent l'espérance du trade : time of day, contexte HTF, structure, liquidité."},
+                {l:'Variables',    c:'rgba(255,34,85,0.06)',  b:'rgba(255,34,85,0.15)',  t:'#ff2255', desc:"Dépendantes (fixes : risk, modèle) vs Indépendantes (volatilité, spread, price action du jour)."},
+              ].map((m,i)=>(
+                <div key={i} style={{background:m.c,border:'1px solid '+m.b,borderRadius:3,padding:'12px 14px'}}>
+                  <div style={{fontFamily:'Orbitron,sans-serif',fontSize:9,color:m.t,letterSpacing:2,marginBottom:6,textTransform:'uppercase'}}>{m.l}</div>
+                  <div style={{fontSize:10,color:'#3a6b8a',lineHeight:1.7}}>{m.desc}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{background:'rgba(255,200,0,0.04)',border:'1px dashed rgba(255,200,0,0.2)',borderRadius:2,padding:'9px 14px',marginBottom:12,fontSize:10,color:'#ffc800',fontFamily:'Orbitron,sans-serif',letterSpacing:1,textAlign:'center'}}>
+              ⚡ UN SEUL CHANGEMENT À LA FOIS = PROGRESSION MAÎTRISÉE
+            </div>
+            <div style={{fontFamily:'Orbitron,sans-serif',fontSize:7,letterSpacing:2,color:'#2a4f68',marginBottom:5,textTransform:'uppercase'}}>Mon plan de trading complet</div>
+            <textarea value={sysNotes.plan||''} onChange={e=>setSysNotes(n=>Object.assign({},n,{plan:e.target.value}))} rows={4}
+              placeholder="Hypothèse du jour, biais, niveaux clés, ce que je cherche exactement..."
+              style={{width:'100%',background:'#081625',border:'1px solid rgba(0,170,255,0.1)',color:'#c5e8ff',fontFamily:'Share Tech Mono,monospace',fontSize:11,padding:'8px',borderRadius:2,outline:'none',resize:'vertical',boxSizing:'border-box'}}/>
+          </div>
+
+          {/* Checklist */}
+          <div style={{background:'#060f1a',border:'1px solid rgba(0,255,163,0.12)',borderRadius:3,padding:16}}>
+            <div style={{fontFamily:'Orbitron,sans-serif',fontSize:9,letterSpacing:2,color:'#00ffa3',textTransform:'uppercase',marginBottom:10}}>✅ MA CHECKLIST PRÉ-TRADE</div>
+            <textarea value={sysNotes.checklist||''} onChange={e=>setSysNotes(n=>Object.assign({},n,{checklist:e.target.value}))} rows={9}
+              placeholder={"☐ Biais H4/Daily confirmé ?\n☐ Je suis dans la bonne session ?\n☐ Zone macro identifiée ?\n☐ Micro zone + Market Shift visible ?\n☐ SL/TP définis AVANT d'entrer ?\n☐ État émotionnel stable ?\n☐ R:R minimum 1.5 ?\n☐ DD journalier pas encore atteint ?"}
+              style={{width:'100%',background:'#081625',border:'1px solid rgba(0,255,163,0.1)',color:'#c5e8ff',fontFamily:'Share Tech Mono,monospace',fontSize:11,padding:'10px 12px',borderRadius:2,outline:'none',resize:'vertical',lineHeight:1.9,boxSizing:'border-box'}}/>
+          </div>
+
+        </div>
+      )}
+
       {/* ══ OBJECTIVES MODAL ═══════════════════════════════════════════════ */}
       {showObj&&(
         <div style={{position:'fixed',inset:0,background:'rgba(2,9,15,0.9)',backdropFilter:'blur(6px)',zIndex:150,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
@@ -1100,3 +1387,4 @@ export default function TradingJournal(){
     </div>
   );
 }
+
