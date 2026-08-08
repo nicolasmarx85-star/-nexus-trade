@@ -22,7 +22,9 @@ input[type=file]{display:none}
 .spin{animation:spin .8s linear infinite}
 `;
 
-const STRATEGIES = ['Red Pile FX','Trend Follow','Breakout','Reversal','Scalp','Swing','Mean Reversion','News/Event','Gap Play','VWAP Reclaim','Other'];
+const STRATEGIES  = ['Red Pile FX','Trend Follow','Breakout','Reversal','Scalp','Swing','Mean Reversion','News/Event','Gap Play','VWAP Reclaim','Other'];
+const CONFLUENCES = ['IPA','EPA','Order Block','FVG','Breaker Block','Market Shift','Liquidity Sweep','CHOCH','BOS','HTF Confluence','Mèche Liquidation','Micro-structure'];
+const SETUPS      = ['A','B','C','D'];
 const SYMBOLS    = ['NAS100','SPX500'];
 const SESSIONS   = ['NY Open','NY Afternoon','London Open','LN/NY Overlap','Asia'];
 const TIMEFRAMES = ['1m','5m','15m','30m','1H','4H','Daily'];
@@ -58,7 +60,7 @@ const getDOW  = d => new Date(d+'T12:00:00').getDay();
 const daysInMonth = ym => { const [y,m]=ym.split('-').map(Number); return new Date(y,m,0).getDate(); };
 const firstDOW    = ym => { const [y,m]=ym.split('-').map(Number); return new Date(y,m-1,1).getDay(); };
 
-const EMPTY = {date:today(),symbol:'NAS100',direction:'Long',status:'Closed',result:'',strategy:'Breakout',session:'NY Open',timeframe:'15m',emotion:'😐 Neutre',notes:'',retro:''};
+const EMPTY = {date:today(),symbol:'NAS100',direction:'Long',status:'Closed',result:'',strategy:'Breakout',session:'NY Open',timeframe:'15m',emotion:'😐 Neutre',notes:'',retro:'',tradeTime:'',confluences:[],setup:''};
 const toBase64 = file => new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(file); });
 
 async function resizeImage(dataUrl,maxPx=1200){
@@ -282,7 +284,7 @@ export default function TradingJournal(){
   const openAdd =()=>{ setEditId(null); setForm(Object.assign({},EMPTY,{date:today()})); setFormImages([]); setShowForm(true); };
   const openEdit=async t=>{
     setEditId(t.id);
-    setForm({date:t.date,symbol:t.symbol,direction:t.direction,status:t.status,result:t.result||'',strategy:t.strategy,session:t.session||'NY Open',timeframe:t.timeframe||'15m',emotion:t.emotion||'😐 Neutre',notes:t.notes||'',retro:t.retro||''});
+    setForm({date:t.date,symbol:t.symbol,direction:t.direction,status:t.status,result:t.result||'',strategy:t.strategy,session:t.session||'NY Open',timeframe:t.timeframe||'15m',emotion:t.emotion||'😐 Neutre',notes:t.notes||'',retro:t.retro||'',tradeTime:t.tradeTime||'',confluences:t.confluences||[],setup:t.setup||''});
     const count=t.imageCount||0;
     if(count>0){
       const imgs=await Promise.all(Array.from({length:count},(_,i)=>loadImg(t.id,i)));
@@ -302,7 +304,7 @@ export default function TradingJournal(){
   const submitForm=async()=>{
     if(!form.date||!form.symbol) return;
     const id=editId||Date.now();
-    const trade={id,date:form.date,symbol:form.symbol,direction:form.direction,status:form.status,result:form.result.trim(),rValue:parseR(form.result),strategy:form.strategy,session:form.session,timeframe:form.timeframe,emotion:form.emotion,notes:form.notes,retro:form.retro||'',hasImage:formImages.length>0,imageCount:formImages.length};
+    const trade={id,date:form.date,symbol:form.symbol,direction:form.direction,status:form.status,result:form.result.trim(),rValue:parseR(form.result),strategy:form.strategy,session:form.session,timeframe:form.timeframe,emotion:form.emotion,notes:form.notes,retro:form.retro||'',tradeTime:form.tradeTime||'',confluences:form.confluences||[],setup:form.setup||'',hasImage:formImages.length>0,imageCount:formImages.length};
     const next=editId?trades.map(t=>t.id===editId?trade:t):[...trades,trade];
     persist(next); setShowForm(false);
     await deleteImg(id,10);
@@ -410,7 +412,7 @@ export default function TradingJournal(){
   // ── Filter / sort ─────────────────────────────────────────────────────────
   const filtered=useMemo(()=>{
     let list=[...trades];
-    if(filter)list=list.filter(t=>t.strategy.toLowerCase().includes(filter.toLowerCase())||(t.notes||'').toLowerCase().includes(filter.toLowerCase())||(t.session||'').toLowerCase().includes(filter.toLowerCase()));
+    if(filter){const f=filter.toLowerCase();list=list.filter(t=>t.strategy.toLowerCase().includes(f)||(t.notes||'').toLowerCase().includes(f)||(t.session||'').toLowerCase().includes(f)||(t.tradeTime||'').includes(f)||((t.confluences||[]).some(c=>c.toLowerCase().includes(f)))||(t.setup||'').toLowerCase().includes(f));}
     if(stratFilter!=='ALL')list=list.filter(t=>t.strategy===stratFilter);
     if(symFilter!=='ALL')list=list.filter(t=>t.symbol===symFilter);
     list.sort((a,b)=>{ const av=sort.field==='r'?(a.rValue??-Infinity):a[sort.field]??''; const bv=sort.field==='r'?(b.rValue??-Infinity):b[sort.field]??''; if(typeof av==='string')return sort.dir==='asc'?av.localeCompare(bv):bv.localeCompare(av); return sort.dir==='asc'?av-bv:bv-av; });
@@ -1222,11 +1224,19 @@ export default function TradingJournal(){
                 <div style={{background:'#081625',border:'1px solid rgba(0,170,255,0.08)',borderRadius:3,padding:14}}>
                   <div style={{fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:2.5,color:'#3a6b8a',textTransform:'uppercase',marginBottom:10}}>◈ DÉTAILS</div>
                   <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-                    {[{l:'Résultat',v:detail.result||'—'},{l:'Stratégie',v:detail.strategy},{l:'Session',v:detail.session||'—'},{l:'Timeframe',v:detail.timeframe||'—'},{l:'État',v:detail.emotion||'—'},{l:'Status',v:detail.status}].map((r,i)=>(
+                    {[{l:'Résultat',v:detail.result||'—'},{l:'Stratégie',v:detail.strategy},{l:'Session',v:detail.session||'—'},{l:'Timeframe',v:detail.timeframe||'—'},{l:'Heure',v:detail.tradeTime||'—'},{l:'Setup',v:detail.setup||'—'},{l:'État',v:detail.emotion||'—'},{l:'Status',v:detail.status}].map((r,i)=>(
                       <div key={i}><div style={{fontSize:8,letterSpacing:1,color:'#2a4f68',textTransform:'uppercase',marginBottom:2,fontFamily:'Orbitron,sans-serif'}}>{r.l}</div><div style={{fontSize:11,color:'#c5e8ff'}}>{r.v}</div></div>
                     ))}
                   </div>
                   {detail.notes&&<div style={{marginTop:10,paddingTop:10,borderTop:'1px solid rgba(0,170,255,0.07)',fontSize:10,color:'#3a6b8a',lineHeight:1.7}}><span style={{fontFamily:'Orbitron,sans-serif',fontSize:7,letterSpacing:2,color:'#2a4f68'}}>NOTES · </span>{detail.notes}</div>}
+                  {detail.confluences&&detail.confluences.length>0&&(
+                    <div style={{marginTop:10,paddingTop:10,borderTop:'1px solid rgba(0,255,163,0.1)'}}>
+                      <div style={{fontFamily:'Orbitron,sans-serif',fontSize:7,letterSpacing:2,color:'#00ffa3',marginBottom:6}}>🎯 CONFLUENCES</div>
+                      <div style={{display:'flex',flexWrap:'wrap',gap:4}}>
+                        {detail.confluences.map(c=><span key={c} style={{background:'rgba(0,255,163,0.08)',border:'1px solid rgba(0,255,163,0.25)',color:'#00ffa3',fontFamily:'Orbitron,sans-serif',fontSize:7,letterSpacing:.5,padding:'3px 8px',borderRadius:2}}>{c}</span>)}
+                      </div>
+                    </div>
+                  )}
                   {detail.retro&&<div style={{marginTop:10,paddingTop:10,borderTop:'1px solid rgba(255,200,0,0.12)',background:'rgba(255,200,0,0.04)',borderRadius:2,padding:'10px 12px'}}><div style={{fontFamily:'Orbitron,sans-serif',fontSize:7,letterSpacing:2,color:'#ffc800',marginBottom:5}}>💡 QU'AURAIS-JE DÛ FAIRE ?</div><div style={{fontSize:10,color:'#c5e8ff',lineHeight:1.75}}>{detail.retro}</div></div>}
                 </div>
                 <div style={{background:'#081625',border:'1px solid rgba(0,170,255,0.08)',borderRadius:3,padding:14,flex:1}}>
@@ -1298,9 +1308,64 @@ export default function TradingJournal(){
                 )}
               </div>
             </div>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:12}}>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12,marginBottom:12}}>
               <SelectF label="SESSION"   value={form.session}   onChange={v=>setF('session',v)}   options={SESSIONS}/>
               <SelectF label="TIMEFRAME" value={form.timeframe} onChange={v=>setF('timeframe',v)} options={TIMEFRAMES}/>
+              <div>
+                <div style={{fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:2,color:'#3a6b8a',textTransform:'uppercase',marginBottom:5}}>HEURE DU TRADE</div>
+                <input type="time" value={form.tradeTime||''} onChange={e=>setF('tradeTime',e.target.value)}
+                  style={{width:'100%',background:'#081625',border:'1px solid rgba(0,170,255,0.13)',color:'#c5e8ff',fontFamily:'Share Tech Mono,monospace',fontSize:13,padding:'7px 10px',borderRadius:2,outline:'none',transition:'border-color .2s'}}
+                  onFocus={e=>e.target.style.borderColor='rgba(0,170,255,0.45)'}
+                  onBlur={e=>e.target.style.borderColor='rgba(0,170,255,0.13)'}/>
+              </div>
+            </div>
+            {/* ── Confluences ── */}
+            <div style={{marginBottom:12}}>
+              <div style={{fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:2,color:'#00ffa3',textTransform:'uppercase',marginBottom:8}}>🎯 CONFLUENCES</div>
+              <div style={{display:'flex',flexWrap:'wrap',gap:5}}>
+                {CONFLUENCES.map(c=>{
+                  const active=(form.confluences||[]).includes(c);
+                  return(
+                    <button key={c} onClick={()=>{
+                      const cur=form.confluences||[];
+                      setF('confluences',active?cur.filter(x=>x!==c):[...cur,c]);
+                    }} style={{padding:'5px 10px',border:'1px solid '+(active?'rgba(0,255,163,0.5)':'rgba(0,170,255,0.1)'),background:active?'rgba(0,255,163,0.1)':'transparent',color:active?'#00ffa3':'#3a6b8a',fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:.5,cursor:'pointer',borderRadius:2,transition:'all .15s',whiteSpace:'nowrap'}}>
+                      {active&&'✓ '}{c}
+                    </button>
+                  );
+                })}
+              </div>
+              {(form.confluences||[]).length>0&&(
+                <div style={{marginTop:6,fontSize:9,color:'#2a4f68',fontFamily:'Share Tech Mono,monospace'}}>
+                  Sélectionnées : {(form.confluences||[]).join(' · ')}
+                </div>
+              )}
+            </div>
+
+            {/* ── Setup Quality ── */}
+            <div style={{marginBottom:12}}>
+              <div style={{fontFamily:'Orbitron,sans-serif',fontSize:8,letterSpacing:2,color:'#00aaff',textTransform:'uppercase',marginBottom:8}}>⭐ QUALITÉ DU SETUP</div>
+              <div style={{display:'flex',gap:8}}>
+                {[
+                  {l:'A',desc:'Setup parfait — toutes les confluences alignées',c:'#00ffa3',bg:'rgba(0,255,163,0.1)',border:'rgba(0,255,163,0.5)'},
+                  {l:'B',desc:'Bon setup — quelques confluences manquantes',c:'#00aaff',bg:'rgba(0,170,255,0.1)',border:'rgba(0,170,255,0.5)'},
+                  {l:'C',desc:'Setup moyen — prendre avec précaution',c:'#ffc800',bg:'rgba(255,200,0,0.08)',border:'rgba(255,200,0,0.4)'},
+                  {l:'D',desc:'Setup faible — ne pas trader idéalement',c:'#ff2255',bg:'rgba(255,34,85,0.08)',border:'rgba(255,34,85,0.4)'},
+                ].map(s=>{
+                  const active=form.setup===s.l;
+                  return(
+                    <button key={s.l} onClick={()=>setF('setup',active?'':s.l)}
+                      style={{flex:1,padding:'10px 0',border:'1px solid '+(active?s.border:'rgba(0,170,255,0.1)'),background:active?s.bg:'transparent',color:active?s.c:'#3a6b8a',fontFamily:'Orbitron,sans-serif',fontSize:16,fontWeight:900,cursor:'pointer',borderRadius:3,transition:'all .15s',letterSpacing:1}}>
+                      {s.l}
+                    </button>
+                  );
+                })}
+              </div>
+              {form.setup&&(
+                <div style={{marginTop:6,fontSize:9,color:'#2a4f68',fontFamily:'Share Tech Mono,monospace'}}>
+                  {[{l:'A',desc:'Setup parfait — toutes les confluences alignées'},{l:'B',desc:'Bon setup — quelques confluences manquantes'},{l:'C',desc:'Setup moyen — prendre avec précaution'},{l:'D',desc:'Setup faible — ne pas trader idéalement'}].find(s=>s.l===form.setup)?.desc}
+                </div>
+              )}
             </div>
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:12}}>
               <SelectF label="STRATÉGIE" value={form.strategy} onChange={v=>setF('strategy',v)} options={STRATEGIES}/>
